@@ -1,0 +1,142 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="ChangeListManager">
+    <list default="true" id="46c202be-f9c0-4f2a-bd8e-126e7bfa6c08" name="Default Changelist" comment="">
+      <change beforePath="$PROJECT_DIR$/src/assisted_installer_controller/assisted_installer_controller_test.go" beforeDir="false" afterPath="$PROJECT_DIR$/src/assisted_installer_controller/assisted_installer_controller_test.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/common/common.go" beforeDir="false" afterPath="$PROJECT_DIR$/src/common/common.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/installer/installer.go" beforeDir="false" afterPath="$PROJECT_DIR$/src/installer/installer.go" afterDir="false" />
+    </list>
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="FileTemplateManagerImpl">
+    <option name="RECENT_TEMPLATES">
+      <list>
+        <option value="Go File" />
+      </list>
+    </option>
+  </component>
+  <component name="GOROOT" path="/usr/lib/golang" />
+  <component name="Git.Settings">
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+  </component>
+  <component name="GoLibraries">
+    <option name="indexEntireGoPath" value="false" />
+  </component>
+  <component name="IgnoredFileRootStore">
+    <option name="generatedRoots">
+      <set>
+        <option value="$PROJECT_DIR$/.idea" />
+      </set>
+    </option>
+  </component>
+  <component name="ProjectId" id="1bUg8m0O5iUqBVzTS0wXPhnhEK6" />
+  <component name="ProjectLevelVcsManager" settingsEditedManually="true" />
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showExcludedFiles" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent">
+    <property name="DefaultGoTemplateProperty" value="Go File" />
+    <property name="RunOnceActivity.ShowReadmeOnStart" value="true" />
+    <property name="WebServerToolWindowFactoryState" value="false" />
+    <property name="go.import.settings.migrated" value="true" />
+    <property name="go.sdk.automatically.set" value="true" />
+    <property name="go.tried.to.enable.integration.vgo.integrator" value="true" />
+    <property name="last_opened_file_path" value="$PROJECT_DIR$/deploy/assisted-installer-controller" />
+  </component>
+  <component name="RecentsManager">
+    <key name="MoveFile.RECENT_KEYS">
+      <recent name="$PROJECT_DIR$/deploy/assisted-installer-controller" />
+      <recent name="$PROJECT_DIR$/deploy" />
+      <recent name="$PROJECT_DIR$/src/ops" />
+      <recent name="$PROJECT_DIR$/deploy/openshift_resource" />
+      <recent name="$PROJECT_DIR$/deploy/assisted-backup" />
+    </key>
+    <key name="CopyFile.RECENT_KEYS">
+      <recent name="$PROJECT_DIR$/deploy/assisted-installer-controller" />
+      <recent name="$PROJECT_DIR$/deploy" />
+      <recent name="$PROJECT_DIR$/src/ops" />
+      <recent name="$PROJECT_DIR$/src/assisted_installer_controller" />
+      <recent name="$PROJECT_DIR$/deploy/finisher" />
+    </key>
+  </component>
+  <component name="ServiceViewManager">
+    <option name="viewStates">
+      <list>
+        <serviceView>
+          <treeState>
+            <expand />
+            <select />
+          </treeState>
+        </serviceView>
+      </list>
+    </option>
+  </component>
+  <component name="TypeScriptGeneratedFilesManager">
+    <option name="version" value="1" />
+  </component>
+  <component name="Vcs.Log.History.Properties">
+    <option name="COLUMN_ORDER">
+      <list>
+        <option value="0" />
+        <option value="2" />
+        <option value="3" />
+        <option value="1" />
+      </list>
+    </option>
+  </component>
+  <component name="VgoProject">
+    <integration-enabled>true</integration-enabled>
+    <proxy>direct</proxy>
+  </component>
+  <component name="WindowStateProjectService">
+    <state x="100" y="127" width="1720" height="820" key="DiffContextDialog" timestamp="1601752846433">
+      <screen x="0" y="27" width="1920" height="1020" />
+    </state>
+    <state x="100" y="127" width="1720" height="820" key="DiffContextDialog/0.27.1920.1020@0.27.1920.1020" timestamp="1601752846433" />
+    <state x="693" y="240" width="524" height="601" key="FileChooserDialogImpl" timestamp="1597305248328">
+      <screen x="0" y="27" width="1920" height="1020" />
+    </state>
+    <state x="693" y="240" width="524" height="601" key="FileChooserDialogImpl/0.27.1920.1020@0.27.1920.1020" timestamp="1597305248328" />
+    <state x="100" y="127" width="1720" height="820" key="VCS.FileHistoryDialog" timestamp="1597737290386">
+      <screen x="0" y="27" width="1920" height="1020" />
+    </state>
+    <state x="100" y="127" width="1720" height="820" key="VCS.FileHistoryDialog/0.27.1920.1020@0.27.1920.1020" timestamp="1597737290386" />
+    <state x="100" y="127" width="1720" height="820" key="com.intellij.history.integration.ui.views.FileHistoryDialog" timestamp="1601483327264">
+      <screen x="0" y="27" width="1920" height="1020" />
+    </state>
+    <state x="100" y="127" width="1720" height="820" key="com.intellij.history.integration.ui.views.FileHistoryDialog/0.27.1920.1020@0.27.1920.1020" timestamp="1601483327264" />
+    <state x="536" y="203" width="1155" height="762" key="find.popup" timestamp="1601752015146">
+      <screen x="0" y="27" width="1920" height="1020" />
+    </state>
+    <state x="536" y="203" width="1155" height="762" key="find.popup/0.27.1920.1020@0.27.1920.1020" timestamp="1601752015146" />
+    <state x="540" y="2" width="840" height="1032" key="search.everywhere.popup" timestamp="1601666503104">
+      <screen x="0" y="27" width="1920" height="1020" />
+    </state>
+    <state x="540" y="2" width="840" height="1032" key="search.everywhere.popup/0.27.1920.1020@0.27.1920.1020" timestamp="1601666503104" />
+    <state x="670" y="439" width="580" height="210" key="vcs.readOnlyHandler.ReadOnlyStatusDialog" timestamp="1597737698886">
+      <screen x="0" y="27" width="1920" height="1020" />
+    </state>
+    <state x="670" y="439" width="580" height="210" key="vcs.readOnlyHandler.ReadOnlyStatusDialog/0.27.1920.1020@0.27.1920.1020" timestamp="1597737698886" />
+  </component>
+  <component name="XDebuggerManager">
+    <breakpoint-manager>
+      <breakpoints>
+        <line-breakpoint enabled="true" type="DlvLineBreakpoint">
+          <url>file://$PROJECT_DIR$/src/k8s_client/k8s_client.go</url>
+          <line>75</line>
+          <option name="timeStamp" value="1" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" type="DlvLineBreakpoint">
+          <url>file://$PROJECT_DIR$/src/ops/ops.go</url>
+          <line>37</line>
+          <option name="timeStamp" value="2" />
+        </line-breakpoint>
+      </breakpoints>
+    </breakpoint-manager>
+  </component>
+</project>

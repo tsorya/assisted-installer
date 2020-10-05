@@ -19,6 +19,8 @@ func SetConfiguringStatusForHosts(client inventory_client.InventoryClient, inven
 	for key, host := range inventoryHostsMapWithIp {
 		_, ok := notValidStates[host.Host.Progress.CurrentStage]
 		if ok {
+			delete(inventoryHostsMapWithIp, key)
+			fmt.Println("aaaaaaaaaaaaaaa")
 			continue
 		}
 		log.Infof("Verifying if host %s pulled ignition", key)
@@ -38,7 +40,9 @@ func SetConfiguringStatusForHosts(client inventory_client.InventoryClient, inven
 				log.Errorf("Failed to update node installation status, %s", err)
 				continue
 			}
-			inventoryHostsMapWithIp[key].Host.Progress.CurrentStage = status
+			fmt.Println("bbbbbbbbbbbbbbbb")
+			delete(inventoryHostsMapWithIp, key)
+			//inventoryHostsMapWithIp[key].Host.Progress.CurrentStage = status
 		}
 	}
 }

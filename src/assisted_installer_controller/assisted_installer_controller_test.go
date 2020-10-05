@@ -79,13 +79,14 @@ var _ = Describe("installer HostRoleMaster role", func() {
 	})
 
 	getInventoryNodes := func(numOfFullListReturn int) map[string]inventory_client.HostData {
+		cpInventoryNamesIds := inventoryNamesIds
 		for i := 0; i < numOfFullListReturn; i++ {
 			mockbmclient.EXPECT().GetHosts([]string{models.HostStatusDisabled,
-				models.HostStatusError, models.HostStatusInstalled}).Return(inventoryNamesIds, nil).Times(1)
+				models.HostStatusError, models.HostStatusInstalled}).Return(cpInventoryNamesIds, nil).Times(1)
 		}
 		mockbmclient.EXPECT().GetHosts([]string{models.HostStatusDisabled,
 			models.HostStatusError, models.HostStatusInstalled}).Return(map[string]inventory_client.HostData{}, nil).Times(1)
-		return inventoryNamesIds
+		return cpInventoryNamesIds
 	}
 	configuringSuccess := func() {
 		mockk8sclient.EXPECT().GetPods(gomock.Any(), gomock.Any()).Return([]v1.Pod{}, nil).AnyTimes()
@@ -198,7 +199,7 @@ var _ = Describe("installer HostRoleMaster role", func() {
 				}
 				for i, stage := range stages {
 					mockbmclient.EXPECT().UpdateHostInstallProgress(hostIds[i], stage, "").Return(fmt.Errorf("dummy")).Times(1)
-					mockbmclient.EXPECT().UpdateHostInstallProgress(hostIds[i], stage, "").Return(nil).Times(1)
+					mockbmclient.EXPECT().UpdateHostInstallProgress(hostIds[i], stage, "").Return(nil).Times(5)
 				}
 			}
 			mockk8sclient.EXPECT().ListNodes().Return(GetKubeNodes(kubeNamesIds), nil).Times(2)

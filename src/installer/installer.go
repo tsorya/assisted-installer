@@ -295,7 +295,7 @@ func (i *installer) waitForMasterNodes(ctx context.Context, minMasterNodes int, 
 	defer cancel()
 
 	wait.Until(func() {
-		inventoryHostsMap = i.getInventoryHostsMap(inventoryHostsMap)
+		inventoryHostsMap = i.getInventoryHostsMap(inventoryHostsMap, nil)
 		if inventoryHostsMap == nil {
 			return
 		}
@@ -326,6 +326,8 @@ func (i *installer) getInventoryHostsMap(hostsMap map[string]inventory_client.Ho
 			i.log.Warnf("Failed to get hosts info from inventory, err %s", err)
 			return nil
 		}
+		// no need for current host
+		delete(hostsMap, i.Hostname)
 	}
 	return hostsMap
 }
@@ -382,12 +384,23 @@ func (i *installer) verifyHostCanMoveToConfigurationStatus(inventoryHostsMapWith
 	common.SetConfiguringStatusForHosts(i.inventoryClient, inventoryHostsMapWithIp, logs, true, i.log)
 }
 
+func (i *installer) filterHosts(inventoryHostsMapWithIp map[string]inventory_client.HostData) {
+	hostStatusesToSkip := []models.HostStage{models.HostStageConfiguring,
+		models.HostStageJoined, models.HostStageDone, models.HostStageWaitingForIgnition}
+		for hostname, host := range inventoryHostsMapWithIp {
+			if funk.IndexOf(hostStatusesToSkip, host.Host.Status) > -1 {
+				delete(inventoryHostsMapWithIp, hostname)
+			}
+		}
+}
+
 // will run as go routine and tries to find nodes that pulled ignition from mcs
 // it will get mcs logs of static pod that runs on bootstrap and will search for matched ip
 // when match is found it will update inventory service with new host status
 func (i *installer) updateConfiguringStatus(done <-chan bool) {
 	i.log.Infof("Start waiting for configuring state")
 	ticker := time.NewTicker(generalWaitTimeout)
+
 	var inventoryHostsMapWithIp map[string]inventory_client.HostData
 	for {
 		select {
@@ -396,7 +409,7 @@ func (i *installer) updateConfiguringStatus(done <-chan bool) {
 			return
 		case <-ticker.C:
 			i.log.Infof("searching for hosts that pulled ignition already")
-			inventoryHostsMapWithIp = i.getInventoryHostsMap(inventoryHostsMapWithIp)
+			inventoryHostsMapWithIp = i.getInventoryHostsMap(inventoryHostsMapWithIp, hostStatusesToSkip)
 			if inventoryHostsMapWithIp == nil {
 				continue
 			}
