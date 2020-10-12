@@ -35,6 +35,8 @@ import (
 	certificatesv1beta1client "k8s.io/client-go/kubernetes/typed/certificates/v1beta1"
 	runtimeclient "sigs.k8s.io/controller-runtime/pkg/client"
 	runtimeconfig "sigs.k8s.io/controller-runtime/pkg/client/config"
+
+	"github.com/openshift/oc/pkg/cli/admin/inspect"
 )
 
 //var AddToSchemes runtime.SchemeBuilder
@@ -238,6 +240,10 @@ func (c *k8sClient) GetPodLogs(namespace string, podName string, sinceSeconds in
 }
 
 func (c *k8sClient) GetPodLogsAsBuffer(namespace string, podName string, sinceSeconds int64) (*bytes.Buffer, error) {
+	nm := inspect.InspectOptions{Client: c.client, Image: "quay.io/openshift/origin-must-gather:latest"}
+	err :=nm.Run(nil)
+	c.log.WithError(err).Infof("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+
 	podLogOpts := v1.PodLogOptions{}
 	if sinceSeconds > 0 {
 		podLogOpts.SinceSeconds = &sinceSeconds

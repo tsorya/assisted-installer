@@ -15,10 +15,11 @@ require (
 	github.com/metal3-io/baremetal-operator v0.0.0-20200828204955-fc35b7691a8e
 	github.com/onsi/ginkgo v1.14.0
 	github.com/onsi/gomega v1.10.1
-	github.com/openshift/api v0.0.0-20200326152221-912866ddb162
+	github.com/openshift/api v0.0.0-20200521162313-4090b8d67ad8
 	github.com/openshift/assisted-installer-agent v0.0.0-20200811180147-bc9c7b899b8a
 	github.com/openshift/assisted-service v1.0.10-0.20200929140121-f9066dc89ae2
 	github.com/openshift/client-go v0.0.0-20200422192633-6f6c07fc2a70
+	github.com/openshift/oc v0.0.0-alpha.0.0.20200620162412-b644a4b43e8d // indirect
 	github.com/pkg/errors v0.9.1
 	github.com/sirupsen/logrus v1.6.0
 	github.com/thoas/go-funk v0.6.0
@@ -32,6 +33,8 @@ require (
 )
 
 replace (
+	github.com/apcera/gssapi => github.com/openshift/gssapi v0.0.0-20161010215902-5fb4217df13b // Use OpenShift fork
+	github.com/containers/image => github.com/openshift/containers-image v0.0.0-20190130162819-76de87591e9d // Use OpenShift fork
 	github.com/metal3-io/baremetal-operator => github.com/openshift/baremetal-operator v0.0.0-20200715132148-0f91f62a41fe // Use OpenShift fork
 	k8s.io/api => k8s.io/api v0.18.2
 	k8s.io/apimachinery => k8s.io/apimachinery v0.18.2
