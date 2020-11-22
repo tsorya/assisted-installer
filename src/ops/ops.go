@@ -277,6 +277,7 @@ func (o *ops) renderControllerCm() error {
 		"ClusterId":            config.GlobalConfig.ClusterID,
 		"SkipCertVerification": strconv.FormatBool(config.GlobalConfig.SkipCertVerification),
 		"CACertPath":           config.GlobalConfig.CACertPath,
+		"SingleNode":           config.GlobalConfig.SingleNode,
 	}
 
 	return o.renderDeploymentFiles(filepath.Join(controllerDeployFolder, controllerDeployCmTemplate),

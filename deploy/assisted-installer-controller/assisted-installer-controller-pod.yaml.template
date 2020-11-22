@@ -51,6 +51,12 @@ spec:
                   optional: true
             - name: OPENSHIFT_VERSION
               value: "{{.OpenshiftVersion}}"
+            - name: SINGLE_NODE
+              valueFrom:
+                configMapKeyRef:
+                  name: assisted-installer-controller-config
+                  key: single-node
+                  optional: true
           {{if .CACertPath}}
           volumeMounts:
           - name: service-ca-cert-config

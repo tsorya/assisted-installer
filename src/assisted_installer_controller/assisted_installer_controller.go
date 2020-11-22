@@ -52,6 +52,7 @@ type ControllerConfig struct {
 	CACertPath           string `envconfig:"CA_CERT_PATH" required:"false" default:""`
 	Namespace            string `envconfig:"NAMESPACE" required:"false" default:"assisted-installer"`
 	OpenshiftVersion     string `envconfig:"OPENSHIFT_VERSION" required:"true"`
+	SingleNode           bool   `envconfig:"SINGLE_NODE" required:"false" default:"false"`
 }
 type Controller interface {
 	WaitAndUpdateNodesStatus(status *ControllerStatus)
@@ -248,7 +249,7 @@ func (c controller) postInstallConfigs() error {
 	if err != nil {
 		return err
 	}
-	if unpatch {
+	if unpatch && !c.SingleNode {
 		err = utils.WaitForPredicate(WaitTimeout, GeneralWaitInterval, c.unpatchEtcd)
 		if err != nil {
 			return errors.Errorf("Timeout while trying to unpatch etcd")
@@ -550,7 +551,7 @@ func (c controller) collectMustGatherLogs(ctx context.Context) (string, error) {
 		return "", ferr
 	}
 
-	//donwload kubeconfig file
+	//download kubeconfig file
 	kubeconfig_file_name := "kubeconfig-noingress"
 	kubeconfigPath := path.Join(tempDir, kubeconfig_file_name)
 	err := c.ic.DownloadFile(ctx, kubeconfig_file_name, kubeconfigPath)

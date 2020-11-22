@@ -10,3 +10,4 @@ data:
   inventory-url: {{.InventoryUrl}}
   skip-cert-verification: '{{.SkipCertVerification}}'
   ca-cert-path: '{{.CACertPath}}'
+  single-node-mode: '{{.SingleNode}}'
