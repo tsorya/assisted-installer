@@ -395,21 +395,26 @@ var _ = Describe("installer HostRoleMaster role", func() {
 			Expect(ret).Should(BeNil())
 		})
 		It("HostRoleMaster role happy flow with disk cleanup", func() {
+			mkdirSuccess(InstallDir)
 			cleanInstallDeviceClean := func() {
 				mockops.EXPECT().GetVGByPV(device).Return("vg1", nil).Times(1)
 				mockops.EXPECT().RemoveVG("vg1").Return(nil).Times(1)
 				mockops.EXPECT().Wipefs(device).Return(nil).Times(1)
 				mockops.EXPECT().RemovePV(device).Return(nil).Times(1)
 			}
+
 			updateProgressSuccess([][]string{{string(models.HostStageStartingInstallation), conf.Role}})
+			updateProgressSuccess([][]string{{string(models.HostStageInstalling), conf.Role}})
+
 			cleanInstallDeviceClean()
-			err := fmt.Errorf("failed to create dir")
-			mockops.EXPECT().Mkdir(InstallDir).Return(err).Times(1)
+			err := fmt.Errorf("failed to download ignition")
+			mockbmclient.EXPECT().DownloadHostIgnition(gomock.Any(), gomock.Any(), gomock.Any()).Return(err).Times(1)
 			ret := installerObj.InstallNode()
 			Expect(ret).Should(Equal(err))
 		})
 		It("HostRoleMaster role failed to cleanup disk", func() {
 			err := fmt.Errorf("Failed to remove vg")
+			mkdirSuccess(InstallDir)
 			cleanInstallDeviceError := func() {
 				mockops.EXPECT().GetVGByPV(device).Return("vg1", nil).Times(1)
 				mockops.EXPECT().RemoveVG("vg1").Return(err).Times(1)
@@ -421,7 +426,6 @@ var _ = Describe("installer HostRoleMaster role", func() {
 		})
 		It("HostRoleMaster role failed to create dir", func() {
 			updateProgressSuccess([][]string{{string(models.HostStageStartingInstallation), conf.Role}})
-			cleanInstallDevice()
 			err := fmt.Errorf("failed to create dir")
 			mockops.EXPECT().Mkdir(InstallDir).Return(err).Times(1)
 			ret := installerObj.InstallNode()

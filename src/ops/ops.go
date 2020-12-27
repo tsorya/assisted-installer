@@ -30,6 +30,7 @@ type Ops interface {
 	Mkdir(dirName string) error
 	WriteImageToDisk(ignitionPath string, device string, progressReporter inventory_client.InventoryClient, extra []string) error
 	Reboot() error
+	Shutdown() error
 	ExtractFromIgnition(ignitionPath string, fileToExtract string) error
 	SystemctlAction(action string, args ...string) error
 	PrepareController() error
@@ -188,6 +189,16 @@ func (o *ops) Reboot() error {
 	_, err := o.ExecPrivilegeCommand(o.logWriter, "shutdown", "-r", "+1", "'Installation completed, server is going to reboot.'")
 	if err != nil {
 		o.log.Errorf("Failed to reboot node, err: %s", err)
+		return err
+	}
+	return nil
+}
+
+func (o *ops) Shutdown() error {
+	o.log.Info("Shutdown node")
+	_, err := o.ExecPrivilegeCommand(o.logWriter, "shutdown", "-P", "+1", "'Installation completed, server is going to shutdown.'")
+	if err != nil {
+		o.log.Errorf("Failed to shutdown node, err: %s", err)
 		return err
 	}
 	return nil

@@ -26,7 +26,6 @@ const (
 	InstallDir                  = "/opt/install-dir"
 	KubeconfigPathLoopBack      = "/opt/openshift/auth/kubeconfig-loopback"
 	KubeconfigPath              = "/opt/openshift/auth/kubeconfig"
-	minMasterNodes              = 2
 	dockerConfigFile            = "/root/.docker/config.json"
 	assistedControllerPrefix    = "assisted-installer-controller"
 	assistedControllerNamespace = "assisted-installer"
@@ -69,35 +68,54 @@ func (i *installer) InstallNode() error {
 	err := i.cleanupInstallDevice()
 	if err != nil {
 		i.log.Errorf("failed to prepare install device %s, err %s", i.Device, err)
-		return err
 	}
-	i.log.Infof("Finished cleaning up device %s", i.Device)
 
-	if err = i.ops.Mkdir(InstallDir); err != nil {
-		i.log.Errorf("Failed to create install dir: %s", err)
+	isBootstrap := i.Config.Role == string(models.HostRoleBootstrap)
+	isSingleNodeBootstrap := isBootstrap && i.SingleNode
+	if err := i.startInstallation(isSingleNodeBootstrap); err != nil {
 		return err
 	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	errs, _ := errgroup.WithContext(ctx)
 	//cancel the context in case this method ends
 	defer cancel()
-	isBootstrap := false
-	if i.Config.Role == string(models.HostRoleBootstrap) {
-		isBootstrap = true
+
+	if isBootstrap {
 		errs.Go(func() error {
 			return i.runBootstrap(ctx)
 		})
 		i.Config.Role = string(models.HostRoleMaster)
 	}
 
+	if err := i.installNode(isSingleNodeBootstrap); err != nil {
+		return err
+	}
+
+	if isBootstrap {
+		i.UpdateHostInstallProgress(models.HostStageWaitingForControlPlane, "")
+		if err := errs.Wait(); err != nil {
+			i.log.WithError(err).Error("Failed to update progress")
+			return err
+		}
+	}
+
+	return i.finalizingInstallation(isBootstrap, isSingleNodeBootstrap)
+}
+
+func (i *installer) installNode(isSingleNodeBootstrap bool) error {
 	i.UpdateHostInstallProgress(models.HostStageInstalling, i.Config.Role)
+	if isSingleNodeBootstrap {
+		i.log.Infof("Bootstrap in single node mode, skipping installNode")
+		return nil
+	}
 	ignitionPath, err := i.downloadHostIgnition()
 	if err != nil {
+		i.log.WithError(err).Error("Failed to download ignition")
 		return err
 	}
 
 	i.UpdateHostInstallProgress(models.HostStageWritingImageToDisk, "")
-
 	err = utils.Retry(3, time.Second, i.log, func() error {
 		return i.ops.WriteImageToDisk(ignitionPath, i.Device, i.inventoryClient, i.Config.InstallerArgs)
 	})
@@ -107,19 +125,46 @@ func (i *installer) InstallNode() error {
 	} else {
 		i.log.Info("Done writing image to disk")
 	}
-	if isBootstrap {
-		i.UpdateHostInstallProgress(models.HostStageWaitingForControlPlane, "")
-		if err = errs.Wait(); err != nil {
-			i.log.Error(err)
+	return nil
+}
+
+func (i *installer) startInstallation(isSingleNodeBootstrap bool) error {
+	i.UpdateHostInstallProgress(models.HostStageStartingInstallation, i.Config.Role)
+
+	if err := i.ops.Mkdir(InstallDir); err != nil {
+		i.log.WithError(err).Errorf("Failed to create install dir")
+		return err
+	}
+
+	if !isSingleNodeBootstrap {
+		i.log.Infof("Start cleaning up device %s", i.Device)
+		err := i.cleanupInstallDevice()
+		if err != nil {
+			i.log.WithError(err).Errorf("failed to prepare install device %s", i.Device)
 			return err
 		}
+		i.log.Infof("Finished cleaning up device %s", i.Device)
 	}
-	_, err = i.ops.UploadInstallationLogs(isBootstrap)
+
+	return nil
+}
+
+func (i *installer) finalizingInstallation(isBootstrap bool, isSingleNodeBootstrap bool) error {
+
+	stage := models.HostStageRebooting
+	operation := i.ops.Reboot
+	if isSingleNodeBootstrap {
+		stage = models.HostStageDone
+		operation = i.ops.Shutdown
+	}
+	_, err := i.ops.UploadInstallationLogs(isBootstrap)
 	if err != nil {
 		i.log.Errorf("upload installation logs %s", err)
 	}
-	i.UpdateHostInstallProgress(models.HostStageRebooting, "")
-	if err = i.ops.Reboot(); err != nil {
+
+	i.UpdateHostInstallProgress(stage, "")
+
+	if err = operation(); err != nil {
 		return err
 	}
 	return nil
@@ -271,11 +316,17 @@ func (i *installer) downloadHostIgnition() (string, error) {
 }
 
 func (i *installer) waitForControlPlane(ctx context.Context, kc k8s_client.K8SClient) error {
+	minMasterNodes := 2
+	if i.Config.SingleNode {
+		minMasterNodes = 1
+	}
 	i.waitForMasterNodes(ctx, minMasterNodes, kc)
 
 	patch, err := utils.EtcdPatchRequired(i.Config.OpenshiftVersion)
 	if err != nil {
 		i.log.Error(err)
+	}
+	if err := i.applyPatches(kc); err != nil {
 		return err
 	}
 	if patch {
@@ -291,10 +342,25 @@ func (i *installer) waitForControlPlane(ctx context.Context, kc k8s_client.K8SCl
 
 	// waiting for controller pod to be running
 	if err := i.waitForController(); err != nil {
-		i.log.Error(err)
 		return err
 	}
 
+	return nil
+}
+
+func (i *installer) applyPatches(kc k8s_client.K8SClient) error {
+
+	if err := kc.PatchEtcd(); err != nil {
+		i.log.WithError(err).Error("Failed to apply etcd patch")
+		return err
+	}
+
+	if i.Config.SingleNode {
+		if err := kc.PatchAuthentication(); err != nil {
+			i.log.WithError(err).Error("Failed to apply auth patch")
+			return err
+		}
+	}
 	return nil
 }
 
@@ -487,7 +553,6 @@ func (i *installer) filterAlreadyUpdatedHosts(inventoryHostsMapWithIp map[string
 	statesToFilter := map[models.HostStage]struct{}{models.HostStageConfiguring: {}, models.HostStageJoined: {},
 		models.HostStageDone: {}, models.HostStageWaitingForIgnition: {}}
 	for name, host := range inventoryHostsMapWithIp {
-		fmt.Println(name, host.Host.Progress.CurrentStage)
 		_, ok := statesToFilter[host.Host.Progress.CurrentStage]
 		if ok {
 			delete(inventoryHostsMapWithIp, name)

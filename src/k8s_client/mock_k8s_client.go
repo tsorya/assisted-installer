@@ -303,3 +303,17 @@ func (mr *MockK8SClientMockRecorder) GetClusterVersion(name interface{}) *gomock
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetClusterVersion", reflect.TypeOf((*MockK8SClient)(nil).GetClusterVersion), name)
 }
+
+// PatchAuthentication mocks base method
+func (m *MockK8SClient) PatchAuthentication() error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "PatchAuthentication")
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// PatchAuthentication indicates an expected call of PatchAuthentication
+func (mr *MockK8SClientMockRecorder) PatchAuthentication() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PatchAuthentication", reflect.TypeOf((*MockK8SClient)(nil).PatchAuthentication))
+}

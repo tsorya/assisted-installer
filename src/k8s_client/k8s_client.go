@@ -58,6 +58,7 @@ type K8SClient interface {
 	UpdateBMH(bmh *metal3v1alpha1.BareMetalHost) error
 	SetProxyEnvVars() error
 	GetClusterVersion(name string) (*configv1.ClusterVersion, error)
+	PatchAuthentication() error
 }
 
 type K8SClientBuilder func(configPath string, logger *logrus.Logger) (K8SClient, error)
@@ -329,4 +330,15 @@ func (c *k8sClient) GetClusterVersion(name string) (*configv1.ClusterVersion, er
 		Do(context.Background()).
 		Into(result)
 	return result, err
+}
+
+func (c *k8sClient) PatchAuthentication() error {
+	c.log.Info("Patching authentication")
+	data := []byte(`{"spec": {"managementState": "Managed", "unsupportedConfigOverrides": {"useUnsupportedUnsafeNonHANonProductionUnstableOAuthServer": true}}}`)
+	result, err := c.ocClient.OperatorV1().Authentications().Patch(context.Background(), "cluster", types.MergePatchType, data, metav1.PatchOptions{})
+	if err != nil {
+		return errors.Wrap(err, "Failed to patch authentication")
+	}
+	c.log.Infof("Patch result %+v", result)
+	return nil
 }
