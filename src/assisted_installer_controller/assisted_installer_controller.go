@@ -116,8 +116,12 @@ func logHostsStatus(log logrus.FieldLogger, hosts map[string]inventory_client.Ho
 	log.Infof("Hosts status: %v", hostsStatus)
 }
 
+<<<<<<< Updated upstream
 func (c *controller) WaitAndUpdateNodesStatus(status *ControllerStatus) {
 
+=======
+func (c *controller) WaitAndUpdateNodesStatus(status *ControllerStatus) error {
+>>>>>>> Stashed changes
 	c.log.Infof("Waiting till all nodes will join and update status to assisted installer")
 	ignoreStatuses := []string{models.HostStatusDisabled}
 	var hostsInError int
@@ -141,7 +145,7 @@ func (c *controller) WaitAndUpdateNodesStatus(status *ControllerStatus) {
 		//if all hosts are in error, mark the failure and finish
 		if hostsInError > 0 && hostsInError == len(hostsInProgressMap) {
 			status.Error()
-			break
+			return errors.Errorf("return error")
 		}
 		//if all hosts are successfully installed, finish
 		if len(hostsInProgressMap) == 0 {
@@ -182,6 +186,7 @@ func (c *controller) WaitAndUpdateNodesStatus(status *ControllerStatus) {
 		c.updateConfiguringStatusIfNeeded(assistedNodesMap)
 	}
 	c.log.Infof("Done waiting for all the nodes. Nodes in error status: %d\n", hostsInError)
+	return nil
 }
 
 func (c *controller) HackDNSAddressConflict(wg *sync.WaitGroup) {
@@ -318,25 +323,28 @@ func isCsrApproved(csr *certificatesv1.CertificateSigningRequest) bool {
 	return false
 }
 
-func (c controller) PostInstallConfigs(wg *sync.WaitGroup, status *ControllerStatus) {
+func (c controller) PostInstallConfigs(ctx context.Context, wg *sync.WaitGroup, status *ControllerStatus) {
 	defer wg.Done()
-	for {
-		time.Sleep(GeneralWaitInterval)
+	err := utils.WaitForPredicateWithContext(ctx, time.Duration(1<<63 - 1), GeneralWaitInterval, func() bool {
 		ctx := utils.GenerateRequestContext()
 		cluster, err := c.ic.GetCluster(ctx)
 		if err != nil {
 			utils.RequestIDLogger(ctx, c.log).WithError(err).Errorf("Failed to get cluster %s from assisted-service", c.ClusterID)
-			continue
+			return false
 		}
 		// waiting till cluster will be installed(3 masters must be installed)
 		if *cluster.Status != models.ClusterStatusFinalizing {
-			continue
+			return false
 		}
-		break
+		return true
+	})
+	if err != nil {
+		return
 	}
 
 	errMessage := ""
-	err := c.postInstallConfigs()
+	// TODO veridy if ctx was cancelled
+	err = c.postInstallConfigs(ctx)
 	if err != nil {
 		errMessage = err.Error()
 		status.Error()
@@ -345,19 +353,19 @@ func (c controller) PostInstallConfigs(wg *sync.WaitGroup, status *ControllerSta
 	c.sendCompleteInstallation(success, errMessage)
 }
 
-func (c controller) postInstallConfigs() error {
+func (c controller) postInstallConfigs(ctx context.Context) error {
 	var err error
 
 	c.log.Infof("Waiting for cluster version operator: %t", c.WaitForClusterVersion)
 
 	if c.WaitForClusterVersion {
-		err = c.waitingForClusterVersion()
+		err = c.waitingForClusterVersion(ctx)
 		if err != nil {
 			return err
 		}
 	}
 
-	err = utils.WaitForPredicate(WaitTimeout, GeneralWaitInterval, c.addRouterCAToClusterCA)
+	err = utils.WaitForPredicateWithContext(ctx, WaitTimeout, GeneralWaitInterval, c.addRouterCAToClusterCA)
 	if err != nil {
 		return errors.Errorf("Timeout while waiting router ca data")
 	}
@@ -367,7 +375,7 @@ func (c controller) postInstallConfigs() error {
 		return err
 	}
 	if unpatch && c.HighAvailabilityMode != models.ClusterHighAvailabilityModeNone {
-		err = utils.WaitForPredicate(WaitTimeout, GeneralWaitInterval, c.unpatchEtcd)
+		err = utils.WaitForPredicateWithContext(ctx, WaitTimeout, GeneralWaitInterval, c.unpatchEtcd)
 		if err != nil {
 			return errors.Errorf("Timeout while trying to unpatch etcd")
 		}
@@ -375,13 +383,13 @@ func (c controller) postInstallConfigs() error {
 		c.log.Infof("Skipping etcd unpatch for cluster version %s", c.ControllerConfig.OpenshiftVersion)
 	}
 
-	err = utils.WaitForPredicate(WaitTimeout, GeneralWaitInterval, c.validateConsoleAvailability)
+	err = utils.WaitForPredicateWithContext(ctx, WaitTimeout, GeneralWaitInterval, c.validateConsoleAvailability)
 	if err != nil {
 		return errors.Errorf("Timeout while waiting for console to become available")
 	}
 
 	waitTimeout := c.getMaximumOLMTimeout()
-	err = utils.WaitForPredicate(waitTimeout, GeneralWaitInterval, c.waitForOLMOperators)
+	err = utils.WaitForPredicateWithContext(ctx, waitTimeout, GeneralWaitInterval, c.waitForOLMOperators)
 	if err != nil {
 		// In case the timeout occur, we have to update the pending OLM operators to failed state,
 		// so the assisted-service can update the cluster state to completed.
@@ -394,14 +402,13 @@ func (c controller) postInstallConfigs() error {
 	return nil
 }
 
-func (c controller) UpdateBMHs(wg *sync.WaitGroup) {
+func (c controller) UpdateBMHs(ctx context.Context, wg *sync.WaitGroup) {
 	defer wg.Done()
-	for {
-		time.Sleep(GeneralWaitInterval)
+	_ = utils.WaitForPredicateWithContext(ctx, time.Duration(1<<63 - 1), GeneralWaitInterval, func() bool {
 		bmhs, err := c.kc.ListBMHs()
 		if err != nil {
 			c.log.WithError(err).Errorf("Failed to list BMH hosts")
-			continue
+			return false
 		}
 
 		c.log.Infof("Number of BMHs is %d", len(bmhs.Items))
@@ -409,7 +416,7 @@ func (c controller) UpdateBMHs(wg *sync.WaitGroup) {
 		machines, err := c.unallocatedMachines(bmhs)
 		if err != nil {
 			c.log.WithError(err).Errorf("Failed to find unallocated machines")
-			continue
+			return false
 		}
 
 		c.log.Infof("Number of unallocated Machines is %d", len(machines.Items))
@@ -417,9 +424,10 @@ func (c controller) UpdateBMHs(wg *sync.WaitGroup) {
 		allUpdated := c.updateBMHs(&bmhs, machines)
 		if allUpdated {
 			c.log.Infof("Updated all the BMH CRs, finished successfully")
-			return
+			return true
 		}
-	}
+		return false
+	})
 }
 
 func (c controller) unallocatedMachines(bmhList metal3v1alpha1.BareMetalHostList) (*mapiv1beta1.MachineList, error) {
@@ -766,7 +774,7 @@ func (c controller) validateConsoleAvailability() bool {
 //
 // This function would be aligned with the console operator reporting workflow
 // as part of the deprecation of the old API in MGMT-5188.
-func (c controller) waitingForClusterVersion() error {
+func (c controller) waitingForClusterVersion(ctx context.Context) error {
 	isClusterVersionAvailable := func() bool {
 		c.log.Infof("Checking cluster version operator availability status")
 		co, err := c.kc.GetClusterVersion("version")
@@ -801,7 +809,7 @@ func (c controller) waitingForClusterVersion() error {
 		return false
 	}
 
-	err := utils.WaitForPredicate(WaitTimeout, GeneralProgressUpdateInt, isClusterVersionAvailable)
+	err := utils.WaitForPredicateWithContext(ctx, WaitTimeout, GeneralProgressUpdateInt, isClusterVersionAvailable)
 	if err != nil {
 		return errors.Errorf("Timeout while waiting for cluster version to be available")
 	}
