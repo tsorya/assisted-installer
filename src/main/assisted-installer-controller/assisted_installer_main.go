@@ -64,9 +64,11 @@ func main() {
 	ctxApprove, cancelApprove := context.WithCancel(context.Background())
 	go assistedController.ApproveCsrs(ctxApprove, &wg)
 	wg.Add(1)
-	go assistedController.PostInstallConfigs(&wg, &status)
+
+	ctxOthers, cancelOthers := context.WithCancel(context.Background())
+	go assistedController.PostInstallConfigs(ctxOthers, &wg, &status)
 	wg.Add(1)
-	go assistedController.UpdateBMHs(&wg)
+	go assistedController.UpdateBMHs(ctxOthers, &wg)
 	wg.Add(1)
 	go assistedController.HackDNSAddressConflict(&wg)
 	wg.Add(1)
@@ -76,13 +78,19 @@ func main() {
 	wgLogs.Add(1)
 
 	assistedController.SetReadyState()
-	assistedController.WaitAndUpdateNodesStatus(&status)
+	err = assistedController.WaitAndUpdateNodesStatus(&status)
 	logger.Infof("Sleeping for 10 minutes to give a chance to approve all csrs")
-	time.Sleep(10 * time.Minute)
+	if err == nil {
+		time.Sleep(10 * time.Minute)
+	} else {
+		cancelOthers()
+	}
 	cancelApprove()
+
 
 	logger.Infof("Waiting for all go routines to finish")
 	wg.Wait()
+	// TODO verify if canceled and cancel logs without waiting for error
 	if !status.HasError() {
 		//with error the logs are canceled within UploadLogs
 		logger.Infof("closing logs...")
