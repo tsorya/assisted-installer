@@ -116,12 +116,7 @@ func logHostsStatus(log logrus.FieldLogger, hosts map[string]inventory_client.Ho
 	log.Infof("Hosts status: %v", hostsStatus)
 }
 
-<<<<<<< Updated upstream
-func (c *controller) WaitAndUpdateNodesStatus(status *ControllerStatus) {
-
-=======
 func (c *controller) WaitAndUpdateNodesStatus(status *ControllerStatus) error {
->>>>>>> Stashed changes
 	c.log.Infof("Waiting till all nodes will join and update status to assisted installer")
 	ignoreStatuses := []string{models.HostStatusDisabled}
 	var hostsInError int
