@@ -196,7 +196,7 @@ func WaitForPredicateWithContext(ctx context.Context, timeout time.Duration, int
 	// Keep trying until we're time out or get true
 	for {
 		select {
-		case <- ctx.Done():
+		case <-ctx.Done():
 			return errors.Errorf("Cancelled")
 		// Got a timeout! fail with a timeout error
 		case <-timeoutAfter:

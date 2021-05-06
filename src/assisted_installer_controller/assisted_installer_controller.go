@@ -44,6 +44,7 @@ const (
 	dnsOperatorNamespace      = "openshift-dns-operator"
 	maxDeletionAttempts       = 5
 	maxDNSServiceIPAttempts   = 45
+	waitForeverTimeout        = time.Duration(1<<63 - 1) // wait forever ~ 292 years
 )
 
 var (
@@ -116,19 +117,27 @@ func logHostsStatus(log logrus.FieldLogger, hosts map[string]inventory_client.Ho
 	log.Infof("Hosts status: %v", hostsStatus)
 }
 
-func (c *controller) WaitAndUpdateNodesStatus(status *ControllerStatus) error {
+func (c *controller) WaitAndUpdateNodesStatus(ctx context.Context, wg *sync.WaitGroup) {
+	approveCtx, approveCancel := context.WithCancel(ctx)
+	defer func() {
+		approveCancel()
+		c.log.Infof("WaitAndUpdateNodesStatus finished")
+		wg.Done()
+	}()
+
+	go c.ApproveCsrs(approveCtx)
+
 	c.log.Infof("Waiting till all nodes will join and update status to assisted installer")
 	ignoreStatuses := []string{models.HostStatusDisabled}
 	var hostsInError int
-	for {
-		time.Sleep(GeneralWaitInterval)
-		ctx := utils.GenerateRequestContext()
+	waitAndUpdateNodesStatus := func() bool {
+		ctxReq := utils.GenerateRequestContext()
 		log := utils.RequestIDLogger(ctx, c.log)
 
 		assistedNodesMap, err := c.ic.GetHosts(ctx, log, ignoreStatuses)
 		if err != nil {
 			log.WithError(err).Error("Failed to get node map from the assisted service")
-			continue
+			return false
 		}
 
 		logHostsStatus(log, assistedNodesMap)
@@ -139,19 +148,18 @@ func (c *controller) WaitAndUpdateNodesStatus(status *ControllerStatus) error {
 
 		//if all hosts are in error, mark the failure and finish
 		if hostsInError > 0 && hostsInError == len(hostsInProgressMap) {
-			status.Error()
-			return errors.Errorf("return error")
+			return true
 		}
 		//if all hosts are successfully installed, finish
 		if len(hostsInProgressMap) == 0 {
-			break
+			return true
 		}
 		//otherwise, update the progress status and keep waiting
 		log.Infof("Checking if cluster nodes are ready. %d nodes remaining", len(hostsInProgressMap))
 		nodes, err := c.kc.ListNodes()
 		if err != nil {
 			log.WithError(err).Error("Failed to get list of nodes from k8s client")
-			continue
+			return false
 		}
 		for _, node := range nodes.Items {
 			host, ok := hostsInProgressMap[strings.ToLower(node.Name)]
@@ -165,30 +173,36 @@ func (c *controller) WaitAndUpdateNodesStatus(status *ControllerStatus) error {
 			if common.IsK8sNodeIsReady(node) {
 				log.Infof("Found new ready node %s with inventory id %s, kubernetes id %s, updating its status to %s",
 					node.Name, host.Host.ID.String(), node.Status.NodeInfo.SystemUUID, models.HostStageDone)
-				if err := c.ic.UpdateHostInstallProgress(ctx, host.Host.ID.String(), models.HostStageDone, ""); err != nil {
+				if err := c.ic.UpdateHostInstallProgress(ctxReq, host.Host.ID.String(), models.HostStageDone, ""); err != nil {
 					log.WithError(err).Errorf("Failed to update node %s installation status", node.Name)
 					continue
 				}
 			} else if host.Host.Progress.CurrentStage == models.HostStageConfiguring {
 				log.Infof("Found new joined node %s with inventory id %s, kubernetes id %s, updating its status to %s",
 					node.Name, host.Host.ID.String(), node.Status.NodeInfo.SystemUUID, models.HostStageJoined)
-				if err := c.ic.UpdateHostInstallProgress(ctx, host.Host.ID.String(), models.HostStageJoined, ""); err != nil {
+				if err := c.ic.UpdateHostInstallProgress(ctxReq, host.Host.ID.String(), models.HostStageJoined, ""); err != nil {
 					log.WithError(err).Errorf("Failed to update node %s installation status", node.Name)
 					continue
 				}
 			}
 		}
 		c.updateConfiguringStatusIfNeeded(assistedNodesMap)
+		return false
 	}
+
+	_ = utils.WaitForPredicateWithContext(ctx, waitForeverTimeout, GeneralWaitInterval, waitAndUpdateNodesStatus)
+
 	c.log.Infof("Done waiting for all the nodes. Nodes in error status: %d\n", hostsInError)
-	return nil
 }
 
 func (c *controller) HackDNSAddressConflict(wg *sync.WaitGroup) {
 
 	c.log.Infof("Making sure service %s can reserve the .10 address", dnsServiceName)
 
-	defer wg.Done()
+	defer func() {
+		c.log.Infof("HackDNSAddressConflict finished")
+		wg.Done()
+	}()
 	networks, err := c.kc.GetServiceNetworks()
 	if err != nil || len(networks) == 0 {
 		c.log.Errorf("Failed to get service networks: %s", err)
@@ -279,8 +293,7 @@ func (c *controller) updateConfiguringStatusIfNeeded(hosts map[string]inventory_
 	common.SetConfiguringStatusForHosts(c.ic, hosts, logs, false, c.log)
 }
 
-func (c *controller) ApproveCsrs(ctx context.Context, wg *sync.WaitGroup) {
-	defer wg.Done()
+func (c *controller) ApproveCsrs(ctx context.Context) {
 	c.log.Infof("Start approving CSRs")
 	ticker := time.NewTicker(GeneralWaitInterval)
 	for {
@@ -319,12 +332,15 @@ func isCsrApproved(csr *certificatesv1.CertificateSigningRequest) bool {
 }
 
 func (c controller) PostInstallConfigs(ctx context.Context, wg *sync.WaitGroup, status *ControllerStatus) {
-	defer wg.Done()
-	err := utils.WaitForPredicateWithContext(ctx, time.Duration(1<<63 - 1), GeneralWaitInterval, func() bool {
-		ctx := utils.GenerateRequestContext()
+	defer func() {
+		c.log.Infof("Finished PostInstallConfigs")
+		wg.Done()
+	}()
+	err := utils.WaitForPredicateWithContext(ctx, waitForeverTimeout, GeneralWaitInterval, func() bool {
+		ctxReq := utils.GenerateRequestContext()
 		cluster, err := c.ic.GetCluster(ctx)
 		if err != nil {
-			utils.RequestIDLogger(ctx, c.log).WithError(err).Errorf("Failed to get cluster %s from assisted-service", c.ClusterID)
+			utils.RequestIDLogger(ctxReq, c.log).WithError(err).Errorf("Failed to get cluster %s from assisted-service", c.ClusterID)
 			return false
 		}
 		// waiting till cluster will be installed(3 masters must be installed)
@@ -338,14 +354,16 @@ func (c controller) PostInstallConfigs(ctx context.Context, wg *sync.WaitGroup, 
 	}
 
 	errMessage := ""
-	// TODO veridy if ctx was cancelled
 	err = c.postInstallConfigs(ctx)
+	if ctx.Err() != nil {
+		return
+	}
 	if err != nil {
 		errMessage = err.Error()
 		status.Error()
 	}
 	success := err == nil
-	c.sendCompleteInstallation(success, errMessage)
+	c.sendCompleteInstallation(ctx, success, errMessage)
 }
 
 func (c controller) postInstallConfigs(ctx context.Context) error {
@@ -398,8 +416,11 @@ func (c controller) postInstallConfigs(ctx context.Context) error {
 }
 
 func (c controller) UpdateBMHs(ctx context.Context, wg *sync.WaitGroup) {
-	defer wg.Done()
-	_ = utils.WaitForPredicateWithContext(ctx, time.Duration(1<<63 - 1), GeneralWaitInterval, func() bool {
+	defer func() {
+		c.log.Infof("Finished UpdateBMHs")
+		wg.Done()
+	}()
+	_ = utils.WaitForPredicateWithContext(ctx, time.Duration(1<<63-1), GeneralWaitInterval, func() bool {
 		bmhs, err := c.kc.ListBMHs()
 		if err != nil {
 			c.log.WithError(err).Errorf("Failed to list BMH hosts")
@@ -811,16 +832,16 @@ func (c controller) waitingForClusterVersion(ctx context.Context) error {
 	return nil
 }
 
-func (c controller) sendCompleteInstallation(isSuccess bool, errorInfo string) {
+func (c controller) sendCompleteInstallation(ctx context.Context, isSuccess bool, errorInfo string) {
 	c.log.Infof("Start complete installation step, with params success:%t, error info %s", isSuccess, errorInfo)
-	for {
+	_ = utils.WaitForPredicateWithContext(ctx, WaitTimeout, GeneralProgressUpdateInt, func() bool {
 		ctx := utils.GenerateRequestContext()
 		if err := c.ic.CompleteInstallation(ctx, c.ClusterID, isSuccess, errorInfo); err != nil {
 			utils.RequestIDLogger(ctx, c.log).Error(err)
-			continue
+			return false
 		}
-		break
-	}
+		return true
+	})
 	c.log.Infof("Done complete installation step")
 }
 
@@ -932,7 +953,7 @@ func (c controller) collectMustGatherLogs(ctx context.Context, mustGatherImg str
 // Uploading logs every 5 minutes
 // We will take logs of assisted controller and upload them to assisted-service
 // by creating tar gz of them.
-func (c *controller) UploadLogs(ctx context.Context, cancellog context.CancelFunc, wg *sync.WaitGroup, status *ControllerStatus) {
+func (c *controller) UploadLogs(ctx context.Context, wg *sync.WaitGroup, status *ControllerStatus) {
 	defer wg.Done()
 	podName := ""
 	ticker := time.NewTicker(LogsUploadPeriod)
@@ -949,7 +970,7 @@ func (c *controller) UploadLogs(ctx context.Context, cancellog context.CancelFun
 					if err != nil {
 						c.log.Infof("retry uploading logs in 5 minutes...")
 					}
-					return err == nil
+					return err == nil || !status.HasError()
 				})
 			}
 			c.ic.ClusterLogProgressReport(progress_ctx, c.ClusterID, models.LogsStateCompleted)
@@ -967,12 +988,6 @@ func (c *controller) UploadLogs(ctx context.Context, cancellog context.CancelFun
 					continue
 				}
 				podName = pods[0].Name
-			}
-
-			if status.HasError() {
-				c.log.Infof("Error detected. Closing logs and aborting...")
-				cancellog()
-				continue
 			}
 
 			//on normal flow, keep updating the controller log output every 5 minutes
