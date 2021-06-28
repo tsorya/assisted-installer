@@ -6,7 +6,7 @@ NAMESPACE := $(or ${NAMESPACE},assisted-installer)
 GIT_REVISION := $(shell git rev-parse HEAD)
 PUBLISH_TAG := $(or ${GIT_REVISION})
 
-CONTAINER_BUILD_PARAMS = --network=host --label git_revision=${GIT_REVISION}
+CONTAINER_BUILD_PARAMS = --label git_revision=${GIT_REVISION}
 
 REPORTS ?= $(ROOT_DIR)/reports
 CI ?= false
@@ -53,18 +53,18 @@ endif
 build: installer controller
 
 installer:
-	CGO_ENABLED=0 go build -o build/installer src/main/main.go
+	$(GO_BUILD_ENV_PARAMS) CGO_ENABLED=0 go build -o build/installer src/main/main.go
 
 controller:
-	CGO_ENABLED=0 go build -o build/assisted-installer-controller src/main/assisted-installer-controller/assisted_installer_main.go
+	$(GO_BUILD_ENV_PARAMS) CGO_ENABLED=0 go build -o build/assisted-installer-controller src/main/assisted-installer-controller/assisted_installer_main.go
 
 build-images: installer-image controller-image
 
 installer-image:
-	$(CONTAINER_COMMAND) build $(CONTAINER_BUILD_PARAMS) -f Dockerfile.assisted-installer . -t $(INSTALLER)
+	docker buildx build --platform=linux/arm64,linux/amd64 $(CONTAINER_BUILD_PARAMS) -f Dockerfile.assisted-installer . -t $(INSTALLER) --push
 
 controller-image:
-	$(CONTAINER_COMMAND) build $(CONTAINER_BUILD_PARAMS) -f Dockerfile.assisted-installer-controller . -t $(CONTROLLER)
+	docker buildx build --platform=linux/arm64,linux/amd64 $(CONTAINER_BUILD_PARAMS) -f Dockerfile.assisted-installer-controller . -t $(CONTROLLER) --push
 
 push-installer: installer-image
 	$(CONTAINER_COMMAND) push $(INSTALLER)
