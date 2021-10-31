@@ -1,7 +1,10 @@
-FROM quay.io/openshift/origin-cli:4.9.0 AS cli
+FROM --platform=$BUILDPLATFORM quay.io/openshift/origin-cli:4.9.0 AS cli
 
-FROM registry.ci.openshift.org/openshift/release:golang-1.15 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.16 AS builder
+
+ARG TARGETPLATFORM
 ENV GOFLAGS=-mod=mod
+
 WORKDIR /go/src/github.com/openshift/assisted-installer
 
 # Bring in the go dependencies before anything else so we can take
@@ -11,9 +14,10 @@ COPY go.sum go.sum
 RUN go mod download
 
 COPY . .
-RUN make controller
 
-FROM quay.io/centos/centos:centos8
+RUN if [ "$TARGETPLATFORM" = "linux/arm64" ]; then GO_BUILD_ENV_PARAMS="GOOS=linux GOARCH=arm64" make controller;else make controller; fi
+
+FROM --platform=$TARGETPLATFORM quay.io/centos/centos:centos8
 
 RUN yum -y install make gcc unzip wget curl rsync && yum clean all
 COPY --from=builder /go/src/github.com/openshift/assisted-installer/build/assisted-installer-controller /usr/bin/assisted-installer-controller

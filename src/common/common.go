@@ -1,6 +1,7 @@
 package common
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"regexp"
@@ -44,7 +45,7 @@ func SetConfiguringStatusForHosts(client inventory_client.InventoryClient, inven
 			continue
 		}
 		log.Infof("Verifying if host %s pulled ignition", hostName)
-		pat := fmt.Sprintf("(%s).{1,20}(Ignition)", strings.Join(host.IPs, "|"))
+		pat := fmt.Sprintf("(%s).{1,40}(Ignition)", strings.Join(host.IPs, "|"))
 		pattern, err := regexp.Compile(pat)
 		if err != nil {
 			log.WithError(err).Errorf("Failed to compile regex from host %s ips list", hostName)
@@ -58,7 +59,7 @@ func SetConfiguringStatusForHosts(client inventory_client.InventoryClient, inven
 			ctx := utils.GenerateRequestContext()
 			requestLog := utils.RequestIDLogger(ctx, log)
 			requestLog.Infof("Host %s %q found in mcs logs, moving it to %s state", hostName, host.Host.ID.String(), status)
-			if err := client.UpdateHostInstallProgress(ctx, host.Host.ID.String(), status, ""); err != nil {
+			if err := client.UpdateHostInstallProgress(ctx, host.Host.InfraEnvID.String(), host.Host.ID.String(), status, ""); err != nil {
 				requestLog.Errorf("Failed to update node installation status, %s", err)
 				continue
 			}
@@ -97,7 +98,8 @@ func UploadPodLogs(kc k8s_client.K8SClient, ic inventory_client.InventoryClient,
 	log.Infof("Uploading logs for %s in %s", podName, namespace)
 	podLogs, err := kc.GetPodLogsAsBuffer(namespace, podName, sinceSeconds)
 	if err != nil {
-		return errors.Wrapf(err, "Failed to get logs of pod %s", podName)
+		podLogs = &bytes.Buffer{}
+		podLogs.WriteString(errors.Wrapf(err, "Failed to get logs of pod %s", podName).Error())
 	}
 	pr, pw := io.Pipe()
 	defer pr.Close()
@@ -129,4 +131,36 @@ func IsK8sNodeIsReady(node v1.Node) bool {
 		}
 	}
 	return false
+}
+
+// BuildHostsMapIPAddressBased builds a map containing all the IP addresses of the hosts in the
+// inventory so that later we can match reporting hosts based on the IP and not only on the name.
+func BuildHostsMapIPAddressBased(inventoryHostsMap map[string]inventory_client.HostData) map[string]inventory_client.HostData {
+	knownIpAddresses := map[string]inventory_client.HostData{}
+	for _, v := range inventoryHostsMap {
+		for _, ip := range v.IPs {
+			knownIpAddresses[ip] = v
+		}
+	}
+	return knownIpAddresses
+}
+
+// Matching of the host happens based on 2 rules
+//   * if the name of the host and in the inventory is exactly the same, use use it
+//   * if the name is not known in the inventory, we check if the IP address of the
+//     reporting host is known to the inventory
+// Using those rules we can cover the cases where e.g. inventory expects a short
+// hostname, but the host reports itself using its FQDN
+func HostMatchByNameOrIPAddress(node v1.Node, namesMap, IPAddressMap map[string]inventory_client.HostData) (inventory_client.HostData, bool) {
+	host, ok := namesMap[strings.ToLower(node.Name)]
+	if !ok {
+		for _, ip := range node.Status.Addresses {
+			_, exists := IPAddressMap[ip.Address]
+			if exists && ip.Type == v1.NodeInternalIP {
+				ok = true
+				host = IPAddressMap[ip.Address]
+			}
+		}
+	}
+	return host, ok
 }

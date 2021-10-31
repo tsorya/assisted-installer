@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	metal3v1alpha1 "github.com/metal3-io/baremetal-operator/pkg/apis/metal3/v1alpha1"
 	"github.com/openshift/assisted-installer/src/common"
 	machinev1beta1 "github.com/openshift/machine-api-operator/pkg/apis/machine/v1beta1"
@@ -48,8 +49,6 @@ var (
 		MustGatherImage:       "quay.io/test-must-gather:latest",
 	}
 
-	aiNamespaceRunlevelPatch = []byte(`{"metadata":{"labels":{"$patch": "delete", "openshift.io/run-level":"0"}}}`)
-
 	progressClusterVersionCondition = &configv1.ClusterVersion{
 		Status: configv1.ClusterVersionStatus{
 			Conditions: []configv1.ClusterOperatorStatusCondition{{Type: configv1.OperatorProgressing,
@@ -84,28 +83,27 @@ var _ = Describe("installer HostRoleMaster role", func() {
 		inventoryNamesIds  map[string]inventory_client.HostData
 		kubeNamesIds       map[string]string
 		wg                 sync.WaitGroup
-		status             *ControllerStatus
 		defaultStages      []models.HostStage
 	)
 	kubeNamesIds = map[string]string{"node0": "6d6f00e8-70dd-48a5-859a-0f1459485ad9",
 		"node1": "2834ff2e-8965-48a5-859a-0f1459485a77",
 		"node2": "57df89ee-3546-48a5-859a-0f1459485a66"}
-	l.SetOutput(ioutil.Discard)
 
 	BeforeEach(func() {
 		ctrl = gomock.NewController(GinkgoT())
 		mockops = ops.NewMockOps(ctrl)
 		mockbmclient = inventory_client.NewMockInventoryClient(ctrl)
 		mockk8sclient = k8s_client.NewMockK8SClient(ctrl)
+		infraEnvId := strfmt.UUID("7916fa89-ea7a-443e-a862-b3e930309f50")
 		node0Id := strfmt.UUID("7916fa89-ea7a-443e-a862-b3e930309f65")
 		node1Id := strfmt.UUID("eb82821f-bf21-4614-9a3b-ecb07929f238")
 		node2Id := strfmt.UUID("b898d516-3e16-49d0-86a5-0ad5bd04e3ed")
-		currentState := models.HostProgressInfo{CurrentStage: models.HostStageConfiguring}
+		currentState := models.HostProgressInfo{CurrentStage: models.HostStageJoined}
 		currentStatus := models.HostStatusInstallingInProgress
 		inventoryNamesIds = map[string]inventory_client.HostData{
-			"node0": {Host: &models.Host{ID: &node0Id, Progress: &currentState, Status: &currentStatus}},
-			"node1": {Host: &models.Host{ID: &node1Id, Progress: &currentState, Status: &currentStatus}},
-			"node2": {Host: &models.Host{ID: &node2Id, Progress: &currentState, Status: &currentStatus}}}
+			"node0": {Host: &models.Host{InfraEnvID: infraEnvId, ID: &node0Id, Progress: &currentState, Status: &currentStatus}},
+			"node1": {Host: &models.Host{InfraEnvID: infraEnvId, ID: &node1Id, Progress: &currentState, Status: &currentStatus}},
+			"node2": {Host: &models.Host{InfraEnvID: infraEnvId, ID: &node2Id, Progress: &currentState, Status: &currentStatus}}}
 		kubeNamesIds = map[string]string{"node0": "6d6f00e8-70dd-48a5-859a-0f1459485ad9",
 			"node1": "2834ff2e-8965-48a5-859a-0f1459485a77",
 			"node2": "57df89ee-3546-48a5-859a-0f1459485a66"}
@@ -117,7 +115,6 @@ var _ = Describe("installer HostRoleMaster role", func() {
 			models.HostStageDone}
 
 		assistedController = NewController(l, defaultTestControllerConf, mockops, mockbmclient, mockk8sclient)
-		status = &ControllerStatus{}
 	})
 	AfterEach(func() {
 		ctrl.Finish()
@@ -125,17 +122,19 @@ var _ = Describe("installer HostRoleMaster role", func() {
 
 	configuringSuccess := func() {
 		mockk8sclient.EXPECT().GetPods(gomock.Any(), gomock.Any(), "").Return([]v1.Pod{}, nil).AnyTimes()
-		mockbmclient.EXPECT().UpdateHostInstallProgress(gomock.Any(), gomock.Any(), models.HostStageConfiguring, gomock.Any()).AnyTimes()
+		mockbmclient.EXPECT().UpdateHostInstallProgress(gomock.Any(), gomock.Any(), gomock.Any(), models.HostStageConfiguring, gomock.Any()).AnyTimes()
 	}
 
 	updateProgressSuccess := func(stages []models.HostStage, inventoryNamesIds map[string]inventory_client.HostData) {
 		var hostIds []string
+		var infraEnvIds []string
 		for _, host := range inventoryNamesIds {
 			hostIds = append(hostIds, host.Host.ID.String())
+			infraEnvIds = append(infraEnvIds, host.Host.InfraEnvID.String())
 		}
 
 		for i, stage := range stages {
-			mockbmclient.EXPECT().UpdateHostInstallProgress(gomock.Any(), hostIds[i], stage, "").Return(nil).Times(1)
+			mockbmclient.EXPECT().UpdateHostInstallProgress(gomock.Any(), infraEnvIds[i], hostIds[i], stage, "").Return(nil).Times(1)
 		}
 	}
 
@@ -154,10 +153,38 @@ var _ = Describe("installer HostRoleMaster role", func() {
 		mockbmclient.EXPECT().ClusterLogProgressReport(gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
 	}
 
+	mockGetServiceOperators := func(operators []models.MonitoredOperator) {
+		for index := range operators {
+			if operators[index].Status != models.OperatorStatusAvailable {
+				mockbmclient.EXPECT().GetClusterMonitoredOperator(gomock.Any(), gomock.Any(), operators[index].Name).Return(&operators[index], nil).Times(1)
+			} else {
+				mockbmclient.EXPECT().GetClusterMonitoredOperator(gomock.Any(), gomock.Any(), operators[index].Name).Return(&operators[index], nil).MinTimes(1)
+			}
+		}
+	}
+
+	mockGetCSV := func(operator models.MonitoredOperator, csv *olmv1alpha1.ClusterServiceVersion) {
+		randomCSV := uuid.New().String()
+		mockk8sclient.EXPECT().GetCSVFromSubscription(operator.Namespace, operator.SubscriptionName).Return(randomCSV, nil).Times(1)
+		mockk8sclient.EXPECT().GetCSV(operator.Namespace, randomCSV).Return(csv, nil).Times(1)
+	}
+
 	setConsoleAsAvailable := func(clusterID string) {
+		WaitTimeout = 100 * time.Millisecond
+
+		mockGetServiceOperators([]models.MonitoredOperator{{Name: consoleOperatorName, Status: models.OperatorStatusProgressing}})
 		mockk8sclient.EXPECT().GetClusterOperator(consoleOperatorName).Return(validConsoleOperator, nil).Times(1)
 		mockbmclient.EXPECT().UpdateClusterOperator(gomock.Any(), clusterID, consoleOperatorName, models.OperatorStatusAvailable, gomock.Any()).Return(nil).Times(1)
-		mockbmclient.EXPECT().GetClusterMonitoredOperator(gomock.Any(), clusterID, consoleOperatorName).Return(&models.MonitoredOperator{Status: models.OperatorStatusAvailable}, nil).Times(1)
+
+		mockGetServiceOperators([]models.MonitoredOperator{{Name: consoleOperatorName, Status: models.OperatorStatusAvailable}})
+	}
+
+	setCvoAsAvailable := func() {
+		mockGetServiceOperators([]models.MonitoredOperator{{Name: cvoOperatorName, Status: models.OperatorStatusProgressing}})
+		mockk8sclient.EXPECT().GetClusterVersion(clusterVersionName).Return(availableClusterVersionCondition, nil).Times(1)
+		mockbmclient.EXPECT().UpdateClusterOperator(gomock.Any(), gomock.Any(), cvoOperatorName, models.OperatorStatusAvailable, availableClusterVersionCondition.Status.Conditions[0].Message).Times(1)
+
+		mockGetServiceOperators([]models.MonitoredOperator{{Name: cvoOperatorName, Status: models.OperatorStatusAvailable}})
 	}
 
 	setClusterAsFinalizing := func() {
@@ -172,14 +199,12 @@ var _ = Describe("installer HostRoleMaster role", func() {
 	}
 
 	setControllerWaitForOLMOperators := func(clusterID string) {
-		WaitTimeout = 100 * time.Millisecond
-
 		setClusterAsFinalizing()
-		uploadIngressCert(clusterID)
 		setConsoleAsAvailable(clusterID)
+		uploadIngressCert(clusterID)
 	}
 
-	returnServiceWithDot10Address := func(name, namespace string) *gomock.Call {
+	returnServiceWithAddress := func(name, namespace, ip string) *gomock.Call {
 		return mockk8sclient.EXPECT().ListServices("").Return(&v1.ServiceList{
 			Items: []v1.Service{
 				{
@@ -188,15 +213,36 @@ var _ = Describe("installer HostRoleMaster role", func() {
 						Namespace: namespace,
 					},
 					Spec: v1.ServiceSpec{
-						ClusterIP: "10.56.20.10",
+						ClusterIP: ip,
 					},
 				},
 			},
 		}, nil)
 	}
 
+	returnServiceWithDot10Address := func(name, namespace string) *gomock.Call {
+		return returnServiceWithAddress(name, namespace, "10.56.20.10")
+	}
+
 	returnServiceNetwork := func() {
 		mockk8sclient.EXPECT().GetServiceNetworks().Return([]string{"10.56.20.0/24"}, nil)
+	}
+
+	mockGetOLMOperators := func(operators []models.MonitoredOperator) {
+		mockbmclient.EXPECT().GetClusterMonitoredOLMOperators(gomock.Any(), gomock.Any()).Return(operators, nil).Times(1)
+	}
+
+	mockApplyPostInstallManifests := func(operators []models.MonitoredOperator) {
+		mockbmclient.EXPECT().GetClusterMonitoredOLMOperators(gomock.Any(), gomock.Any()).Return(operators, nil).Times(1)
+		mockbmclient.EXPECT().DownloadFile(gomock.Any(), customManifestsFile, gomock.Any()).DoAndReturn(
+			func(ctx context.Context, filename, dest string) error {
+				if err := ioutil.WriteFile(dest, []byte("[]"), 0644); err != nil {
+					return err
+				}
+				return nil
+			},
+		).Times(1)
+		mockbmclient.EXPECT().DownloadClusterCredentials(gomock.Any(), kubeconfigFileName, gomock.Any()).Return(nil).Times(1)
 	}
 
 	Context("Waiting for 3 nodes", func() {
@@ -214,10 +260,14 @@ var _ = Describe("installer HostRoleMaster role", func() {
 			mockk8sclient.EXPECT().CreateEvent(assistedController.Namespace, common.AssistedControllerIsReadyEvent, gomock.Any(), common.AssistedControllerPrefix).Return(nil, nil).Times(1)
 
 			assistedController.SetReadyState()
-			Expect(status.HasError()).Should(Equal(false))
+			Expect(assistedController.Status.HasError()).Should(Equal(false))
 		})
 
 		It("waitAndUpdateNodesStatus happy flow - all nodes installing", func() {
+
+			updateProgressSuccess([]models.HostStage{models.HostStageJoined,
+				models.HostStageJoined,
+				models.HostStageJoined}, inventoryNamesIds)
 			updateProgressSuccess(defaultStages, inventoryNamesIds)
 
 			hosts := create3Hosts(models.HostStatusInstalling, models.HostStageConfiguring)
@@ -302,11 +352,13 @@ var _ = Describe("installer HostRoleMaster role", func() {
 		BeforeEach(func() {
 			updateProgressSuccess = func(stages []models.HostStage, inventoryNamesIds map[string]inventory_client.HostData) {
 				var hostIds []string
+				var infraEnvIds []string
 				for _, host := range inventoryNamesIds {
 					hostIds = append(hostIds, host.Host.ID.String())
+					infraEnvIds = append(infraEnvIds, host.Host.InfraEnvID.String())
 				}
 				for i, stage := range stages {
-					mockbmclient.EXPECT().UpdateHostInstallProgress(gomock.Any(), hostIds[i], stage, "").Return(nil).Times(1)
+					mockbmclient.EXPECT().UpdateHostInstallProgress(gomock.Any(), infraEnvIds[i], hostIds[i], stage, "").Return(nil).Times(1)
 				}
 			}
 			kubeNamesIds = map[string]string{"node0": "6d6f00e8-70dd-48a5-859a-0f1459485ad9",
@@ -355,12 +407,14 @@ var _ = Describe("installer HostRoleMaster role", func() {
 		It("UpdateStatus fails and then succeeds, list nodes failed ", func() {
 			updateProgressSuccessFailureTest := func(stages []models.HostStage, inventoryNamesIds map[string]inventory_client.HostData) {
 				var hostIds []string
+				var infraEnvIds []string
 				for _, host := range inventoryNamesIds {
 					hostIds = append(hostIds, host.Host.ID.String())
+					infraEnvIds = append(infraEnvIds, host.Host.InfraEnvID.String())
 				}
 				for i, stage := range stages {
-					mockbmclient.EXPECT().UpdateHostInstallProgress(gomock.Any(), hostIds[i], stage, "").Return(fmt.Errorf("dummy")).Times(1)
-					mockbmclient.EXPECT().UpdateHostInstallProgress(gomock.Any(), hostIds[i], stage, "").Return(nil).Times(1)
+					mockbmclient.EXPECT().UpdateHostInstallProgress(gomock.Any(), infraEnvIds[i], hostIds[i], stage, "").Return(fmt.Errorf("dummy")).Times(1)
+					mockbmclient.EXPECT().UpdateHostInstallProgress(gomock.Any(), infraEnvIds[i], hostIds[i], stage, "").Return(nil).Times(1)
 				}
 			}
 			mockk8sclient.EXPECT().ListNodes().Return(GetKubeNodes(kubeNamesIds), nil).Times(2)
@@ -478,6 +532,54 @@ var _ = Describe("installer HostRoleMaster role", func() {
 		})
 	})
 
+	Context("waitForCSVBeCreated", func() {
+		var (
+			operatorName     = "lso"
+			subscriptionName = "local-storage-operator"
+			namespaceName    = "openshift-local-storage"
+		)
+		BeforeEach(func() {
+			assistedController.WaitForClusterVersion = true
+			GeneralWaitInterval = 1 * time.Millisecond
+		})
+		It("empty operators", func() {
+			Expect(assistedController.waitForCSVBeCreated([]models.MonitoredOperator{})).Should(Equal(true))
+		})
+		It("wrong subscription", func() {
+			operators := []models.MonitoredOperator{
+				{
+					SubscriptionName: subscriptionName, Namespace: namespaceName,
+					Name: operatorName, Status: models.OperatorStatusProgressing, OperatorType: models.OperatorTypeOlm,
+				},
+			}
+
+			mockk8sclient.EXPECT().GetCSVFromSubscription(operators[0].Namespace, operators[0].SubscriptionName).Return("", fmt.Errorf("dummy")).Times(1)
+			Expect(assistedController.waitForCSVBeCreated(operators)).Should(Equal(false))
+		})
+		It("non-initialized operator", func() {
+			operators := []models.MonitoredOperator{
+				{
+					SubscriptionName: subscriptionName, Namespace: namespaceName,
+					Name: operatorName, Status: models.OperatorStatusProgressing, OperatorType: models.OperatorTypeOlm,
+				},
+			}
+
+			mockk8sclient.EXPECT().GetCSVFromSubscription(operators[0].Namespace, operators[0].SubscriptionName).Return("", nil).Times(1)
+			Expect(assistedController.waitForCSVBeCreated(operators)).Should(Equal(false))
+		})
+		It("initialized operator", func() {
+			operators := []models.MonitoredOperator{
+				{
+					SubscriptionName: subscriptionName, Namespace: namespaceName,
+					Name: operatorName, Status: models.OperatorStatusProgressing, OperatorType: models.OperatorTypeOlm,
+				},
+			}
+
+			mockk8sclient.EXPECT().GetCSVFromSubscription(operators[0].Namespace, operators[0].SubscriptionName).Return("randomCSV", nil).Times(1)
+			Expect(assistedController.waitForCSVBeCreated(operators)).Should(Equal(true))
+		})
+	})
+
 	Context("PostInstallConfigs", func() {
 		Context("waiting for cluster version", func() {
 			BeforeEach(func() {
@@ -487,31 +589,60 @@ var _ = Describe("installer HostRoleMaster role", func() {
 
 			It("success", func() {
 				installing := models.ClusterStatusInstalling
-				mockbmclient.EXPECT().GetCluster(gomock.Any()).Return(nil, fmt.Errorf("dummy")).Times(1)
+				mockbmclient.EXPECT().GetCluster(gomock.Any()).Return(&models.Cluster{Status: &installing}, nil).Times(1)
+				setControllerWaitForOLMOperators(assistedController.ClusterID)
+				setCvoAsAvailable()
+
+				// Completion
+				mockGetOLMOperators([]models.MonitoredOperator{})
+				mockbmclient.EXPECT().CompleteInstallation(gomock.Any(), "cluster-id", true, "").Return(fmt.Errorf("dummy")).Times(1)
+				mockbmclient.EXPECT().CompleteInstallation(gomock.Any(), "cluster-id", true, "").Return(nil).Times(1)
+
+				wg.Add(1)
+				go assistedController.PostInstallConfigs(context.TODO(), &wg)
+				wg.Wait()
+
+				Expect(assistedController.Status.HasError()).Should(Equal(false))
+			})
+
+			It("lots of failures then success", func() {
+				installing := models.ClusterStatusInstalling
 				mockbmclient.EXPECT().GetCluster(gomock.Any()).Return(&models.Cluster{Status: &installing}, nil).Times(1)
 				setClusterAsFinalizing()
-				uploadIngressCert(assistedController.ClusterID)
 
-				// Console
+				// Console errors
+				mockGetServiceOperators([]models.MonitoredOperator{{Name: consoleOperatorName, Status: models.OperatorStatusProgressing}})
 				mockk8sclient.EXPECT().GetClusterOperator(consoleOperatorName).Return(nil, fmt.Errorf("no-operator")).Times(1)
+
+				mockGetServiceOperators([]models.MonitoredOperator{{Name: consoleOperatorName, Status: models.OperatorStatusProgressing}})
 				mockk8sclient.EXPECT().GetClusterOperator(consoleOperatorName).Return(
 					&configv1.ClusterOperator{
 						Status: configv1.ClusterOperatorStatus{
 							Conditions: []configv1.ClusterOperatorStatusCondition{},
 						},
 					}, fmt.Errorf("no-conditions")).Times(1)
+
+				mockGetServiceOperators([]models.MonitoredOperator{{Name: consoleOperatorName, Status: models.OperatorStatusProgressing}})
 				mockk8sclient.EXPECT().GetClusterOperator(consoleOperatorName).Return(
 					getClusterOperatorWithCondition(configv1.OperatorDegraded, configv1.ConditionFalse),
 					fmt.Errorf("false-degraded-condition")).Times(1)
+
+				mockGetServiceOperators([]models.MonitoredOperator{{Name: consoleOperatorName, Status: models.OperatorStatusProgressing}})
 				mockk8sclient.EXPECT().GetClusterOperator(consoleOperatorName).Return(
 					getClusterOperatorWithCondition(configv1.OperatorAvailable, configv1.ConditionTrue),
 					fmt.Errorf("missing-degraded-condition")).Times(1)
+
+				mockGetServiceOperators([]models.MonitoredOperator{{Name: consoleOperatorName, Status: models.OperatorStatusProgressing}})
 				mockk8sclient.EXPECT().GetClusterOperator(consoleOperatorName).Return(
 					getClusterOperatorWithCondition(configv1.OperatorAvailable, configv1.ConditionFalse),
 					fmt.Errorf("false-available-condition")).Times(1)
+
+				mockGetServiceOperators([]models.MonitoredOperator{{Name: consoleOperatorName, Status: models.OperatorStatusProgressing}})
 				mockk8sclient.EXPECT().GetClusterOperator(consoleOperatorName).Return(
 					getClusterOperatorWithCondition(configv1.OperatorAvailable, configv1.ConditionTrue),
 					fmt.Errorf("true-degraded-condition")).Times(1)
+
+				mockGetServiceOperators([]models.MonitoredOperator{{Name: consoleOperatorName, Status: models.OperatorStatusProgressing}})
 				mockk8sclient.EXPECT().GetClusterOperator(consoleOperatorName).Return(
 					&configv1.ClusterOperator{
 						Status: configv1.ClusterOperatorStatus{
@@ -520,60 +651,69 @@ var _ = Describe("installer HostRoleMaster role", func() {
 							},
 						},
 					}, fmt.Errorf("missing-conditions")).Times(1)
+
+				mockGetServiceOperators([]models.MonitoredOperator{{Name: consoleOperatorName, Status: models.OperatorStatusProgressing}})
 				mockk8sclient.EXPECT().GetClusterOperator(consoleOperatorName).Return(
 					getClusterOperatorWithConditionsStatus(configv1.ConditionTrue, configv1.ConditionTrue),
 					fmt.Errorf("bad-conditions-status")).Times(1)
+
+				mockGetServiceOperators([]models.MonitoredOperator{{Name: consoleOperatorName, Status: models.OperatorStatusProgressing}})
 				mockk8sclient.EXPECT().GetClusterOperator(consoleOperatorName).Return(
 					getClusterOperatorWithConditionsStatus(configv1.ConditionFalse, configv1.ConditionTrue),
 					fmt.Errorf("bad-conditions-status")).Times(1)
+
+				mockGetServiceOperators([]models.MonitoredOperator{{Name: consoleOperatorName, Status: models.OperatorStatusProgressing}})
 				mockk8sclient.EXPECT().GetClusterOperator(consoleOperatorName).Return(
 					getClusterOperatorWithConditionsStatus(configv1.ConditionFalse, configv1.ConditionFalse),
 					fmt.Errorf("bad-conditions-status")).Times(1)
+
 				setConsoleAsAvailable("cluster-id")
+				uploadIngressCert(assistedController.ClusterID)
 
-				// Patching NS
-				mockk8sclient.EXPECT().PatchNamespace(defaultTestControllerConf.Namespace, aiNamespaceRunlevelPatch).Return(nil)
+				// CVO errors
+				mockGetServiceOperators([]models.MonitoredOperator{{Name: cvoOperatorName, Status: ""}})
+				mockk8sclient.EXPECT().GetClusterVersion(clusterVersionName).Return(nil, fmt.Errorf("dummy")).Times(1)
 
-				// CVO
-				mockk8sclient.EXPECT().GetClusterVersion("version").Return(nil, fmt.Errorf("dummy")).Times(1)
-
-				mockk8sclient.EXPECT().GetClusterVersion("version").Return(progressClusterVersionCondition, nil).Times(1)
-				mockbmclient.EXPECT().GetClusterMonitoredOperator(gomock.Any(), gomock.Any(), cvoOperatorName).
-					Return(&models.MonitoredOperator{Status: "", StatusInfo: ""}, nil).Times(1)
+				mockGetServiceOperators([]models.MonitoredOperator{{Name: cvoOperatorName, Status: ""}})
+				mockk8sclient.EXPECT().GetClusterVersion(clusterVersionName).Return(progressClusterVersionCondition, nil).Times(1)
 				mockbmclient.EXPECT().UpdateClusterOperator(gomock.Any(), gomock.Any(), cvoOperatorName, models.OperatorStatusProgressing, progressClusterVersionCondition.Status.Conditions[0].Message).Times(1)
 
-				mockk8sclient.EXPECT().GetClusterVersion("version").Return(availableClusterVersionCondition, nil).Times(2)
-				mockbmclient.EXPECT().GetClusterMonitoredOperator(gomock.Any(), gomock.Any(), cvoOperatorName).
-					Return(&models.MonitoredOperator{Status: models.OperatorStatusProgressing, StatusInfo: progressClusterVersionCondition.Status.Conditions[0].Message}, nil).Times(1)
-				mockbmclient.EXPECT().UpdateClusterOperator(gomock.Any(), gomock.Any(), cvoOperatorName, models.OperatorStatusAvailable, availableClusterVersionCondition.Status.Conditions[0].Message).Times(1)
-				mockbmclient.EXPECT().GetClusterMonitoredOperator(gomock.Any(), gomock.Any(), cvoOperatorName).
-					Return(&models.MonitoredOperator{Status: models.OperatorStatusAvailable, StatusInfo: availableClusterVersionCondition.Status.Conditions[0].Message}, nil).Times(1)
+				// Fail 8 more times when console fail
+				extraFailTimes := 8
+				for i := 0; i < extraFailTimes; i++ {
+					mockGetServiceOperators([]models.MonitoredOperator{{Name: cvoOperatorName, Status: ""}})
+				}
+				mockk8sclient.EXPECT().GetClusterVersion(clusterVersionName).Return(nil, fmt.Errorf("dummy")).Times(extraFailTimes)
 
-				// Completion
-				mockbmclient.EXPECT().DownloadFile(gomock.Any(), "custom_manifests.yaml", gomock.Any()).Return(nil).Times(1)
-				mockbmclient.EXPECT().DownloadFile(gomock.Any(), "kubeconfig-noingress", gomock.Any()).Return(nil).Times(1)
-				mockops.EXPECT().CreateManifests(gomock.Any(), gomock.Any()).Return(nil).Times(1)
-				mockbmclient.EXPECT().GetClusterMonitoredOLMOperators(gomock.Any(), gomock.Any()).Return([]models.MonitoredOperator{}, nil).Times(2)
+				setCvoAsAvailable()
+
+				mockGetOLMOperators([]models.MonitoredOperator{})
 				mockbmclient.EXPECT().CompleteInstallation(gomock.Any(), "cluster-id", true, "").Return(fmt.Errorf("dummy")).Times(1)
 				mockbmclient.EXPECT().CompleteInstallation(gomock.Any(), "cluster-id", true, "").Return(nil).Times(1)
 
 				wg.Add(1)
-				go assistedController.PostInstallConfigs(context.TODO(), &wg, status)
+				go assistedController.PostInstallConfigs(context.TODO(), &wg)
 				wg.Wait()
 
-				Expect(status.HasError()).Should(Equal(false))
+				Expect(assistedController.Status.HasError()).Should(Equal(false))
 			})
+
 			It("failure", func() {
-				WaitTimeout = 20 * time.Millisecond
-				GeneralProgressUpdateInt = 30 * time.Millisecond
 				setClusterAsFinalizing()
+
+				mockbmclient.EXPECT().GetClusterMonitoredOperator(gomock.Any(), gomock.Any(), consoleOperatorName).
+					Return(&models.MonitoredOperator{Status: "", StatusInfo: ""}, nil).AnyTimes()
+				mockk8sclient.EXPECT().GetClusterOperator(consoleOperatorName).Return(nil, fmt.Errorf("dummy")).AnyTimes()
+				mockbmclient.EXPECT().GetClusterMonitoredOperator(gomock.Any(), gomock.Any(), cvoOperatorName).
+					Return(&models.MonitoredOperator{Status: "", StatusInfo: ""}, nil).AnyTimes()
+				mockk8sclient.EXPECT().GetClusterVersion(clusterVersionName).Return(nil, fmt.Errorf("dummy")).AnyTimes()
 
 				mockbmclient.EXPECT().CompleteInstallation(gomock.Any(), "cluster-id", false, gomock.Any()).Return(nil).Times(1)
 
 				wg.Add(1)
-				go assistedController.PostInstallConfigs(context.TODO(), &wg, status)
+				go assistedController.PostInstallConfigs(context.TODO(), &wg)
 				wg.Wait()
-				Expect(status.HasError()).Should(Equal(true))
+				Expect(assistedController.Status.HasError()).Should(Equal(true))
 			})
 		})
 
@@ -584,40 +724,28 @@ var _ = Describe("installer HostRoleMaster role", func() {
 			})
 			It("success", func() {
 				installing := models.ClusterStatusInstalling
-				mockbmclient.EXPECT().DownloadFile(gomock.Any(), "custom_manifests.yaml", gomock.Any()).Return(nil).Times(1)
-				mockbmclient.EXPECT().DownloadFile(gomock.Any(), "kubeconfig-noingress", gomock.Any()).Return(nil).Times(1)
-				mockops.EXPECT().CreateManifests(gomock.Any(), gomock.Any()).Return(nil).Times(1)
-				mockbmclient.EXPECT().GetCluster(gomock.Any()).Return(nil, fmt.Errorf("dummy")).Times(1)
 				mockbmclient.EXPECT().GetCluster(gomock.Any()).Return(&models.Cluster{Status: &installing}, nil).Times(1)
-				setClusterAsFinalizing()
-				uploadIngressCert(assistedController.ClusterID)
-				setConsoleAsAvailable("cluster-id")
-				mockbmclient.EXPECT().GetClusterMonitoredOLMOperators(gomock.Any(), gomock.Any()).Return([]models.MonitoredOperator{}, nil).AnyTimes()
+				setControllerWaitForOLMOperators(assistedController.ClusterID)
+				mockGetOLMOperators([]models.MonitoredOperator{})
 				mockbmclient.EXPECT().CompleteInstallation(gomock.Any(), "cluster-id", true, "").Return(fmt.Errorf("dummy")).Times(1)
 				mockbmclient.EXPECT().CompleteInstallation(gomock.Any(), "cluster-id", true, "").Return(nil).Times(1)
 
-				// Patching NS
-				mockk8sclient.EXPECT().PatchNamespace(defaultTestControllerConf.Namespace, aiNamespaceRunlevelPatch).Return(nil)
-
 				wg.Add(1)
-				assistedController.PostInstallConfigs(context.TODO(), &wg, status)
+				assistedController.PostInstallConfigs(context.TODO(), &wg)
 				wg.Wait()
-				Expect(status.HasError()).Should(Equal(false))
+				Expect(assistedController.Status.HasError()).Should(Equal(false))
 			})
 			It("failure", func() {
-				WaitTimeout = 20 * time.Millisecond
 				setClusterAsFinalizing()
+				setConsoleAsAvailable("cluster-id")
 				mockk8sclient.EXPECT().GetConfigMap(gomock.Any(), gomock.Any()).Return(nil, fmt.Errorf("aaa")).MinTimes(1)
 				mockbmclient.EXPECT().CompleteInstallation(gomock.Any(), "cluster-id", false,
-					"Timeout while waiting router ca data").Return(nil).Times(1)
-
-				// Patching NS
-				mockk8sclient.EXPECT().PatchNamespace(defaultTestControllerConf.Namespace, aiNamespaceRunlevelPatch).Return(nil)
+					"Timeout while waiting router ca data: timed out").Return(nil).Times(1)
 
 				wg.Add(1)
-				go assistedController.PostInstallConfigs(context.TODO(), &wg, status)
+				go assistedController.PostInstallConfigs(context.TODO(), &wg)
 				wg.Wait()
-				Expect(status.HasError()).Should(Equal(true))
+				Expect(assistedController.Status.HasError()).Should(Equal(true))
 			})
 		})
 
@@ -628,56 +756,77 @@ var _ = Describe("installer HostRoleMaster role", func() {
 			})
 
 			It("waiting for single OLM operator", func() {
-				setControllerWaitForOLMOperators(assistedController.ClusterID)
+				By("setup", func() {
+					setControllerWaitForOLMOperators(assistedController.ClusterID)
+					operators := []models.MonitoredOperator{
+						{SubscriptionName: "local-storage-operator", Namespace: "openshift-local-storage", OperatorType: models.OperatorTypeOlm, Name: "lso", Status: "", TimeoutSeconds: 120 * 60},
+					}
+					mockGetOLMOperators(operators)
+					mockApplyPostInstallManifests(operators)
+					mockk8sclient.EXPECT().GetCSVFromSubscription(operators[0].Namespace, operators[0].SubscriptionName).Return("local-storage-operator", nil).Times(2)
+				})
 
-				mockbmclient.EXPECT().DownloadFile(gomock.Any(), "custom_manifests.yaml", gomock.Any()).Return(nil).Times(1)
-				mockbmclient.EXPECT().DownloadFile(gomock.Any(), "kubeconfig-noingress", gomock.Any()).Return(nil).Times(1)
-				mockops.EXPECT().CreateManifests(gomock.Any(), gomock.Any()).Return(nil).Times(1)
-				mockbmclient.EXPECT().GetClusterMonitoredOLMOperators(gomock.Any(), gomock.Any()).Return(
-					[]models.MonitoredOperator{{SubscriptionName: "local-storage-operator", Namespace: "openshift-local-storage", OperatorType: models.OperatorTypeOlm, Name: "lso", Status: "", TimeoutSeconds: 120 * 60}}, nil,
-				).Times(1)
-				mockbmclient.EXPECT().GetClusterMonitoredOLMOperators(gomock.Any(), gomock.Any()).Return(
-					[]models.MonitoredOperator{{SubscriptionName: "local-storage-operator", Namespace: "openshift-local-storage", OperatorType: models.OperatorTypeOlm, Name: "lso", Status: models.OperatorStatusProgressing, TimeoutSeconds: 120 * 60}}, nil,
-				).Times(1)
-				mockbmclient.EXPECT().GetClusterMonitoredOLMOperators(gomock.Any(), gomock.Any()).Return(
-					[]models.MonitoredOperator{{SubscriptionName: "local-storage-operator", Namespace: "openshift-local-storage", OperatorType: models.OperatorTypeOlm, Name: "lso", Status: models.OperatorStatusAvailable, TimeoutSeconds: 120 * 60}}, nil,
-				).Times(1)
-				mockk8sclient.EXPECT().GetCSVFromSubscription("openshift-local-storage", "local-storage-operator").Return("lso-1.1", nil).Times(1)
-				mockk8sclient.EXPECT().GetCSV("openshift-local-storage", "lso-1.1").Return(&olmv1alpha1.ClusterServiceVersion{}, nil).Times(1)
-				mockbmclient.EXPECT().UpdateClusterOperator(gomock.Any(), "cluster-id", "lso", gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+				By("empty status", func() {
+					mockGetServiceOperators([]models.MonitoredOperator{{Name: "lso", Status: ""}})
+					mockGetCSV(
+						models.MonitoredOperator{SubscriptionName: "local-storage-operator", Namespace: "openshift-local-storage", Name: "lso"},
+						&olmv1alpha1.ClusterServiceVersion{Status: olmv1alpha1.ClusterServiceVersionStatus{Phase: olmv1alpha1.CSVPhaseInstalling}},
+					)
+				})
+
+				By("in progress", func() {
+					mockGetServiceOperators([]models.MonitoredOperator{{SubscriptionName: "local-storage-operator", Namespace: "openshift-local-storage", Name: "lso", Status: models.OperatorStatusProgressing}})
+					mockGetCSV(
+						models.MonitoredOperator{SubscriptionName: "local-storage-operator", Namespace: "openshift-local-storage", Name: "lso"},
+						&olmv1alpha1.ClusterServiceVersion{Status: olmv1alpha1.ClusterServiceVersionStatus{Phase: olmv1alpha1.CSVPhaseInstalling}},
+					)
+					mockbmclient.EXPECT().UpdateClusterOperator(gomock.Any(), "cluster-id", "lso", models.OperatorStatusProgressing, gomock.Any()).Return(nil).Times(1)
+				})
+
+				By("available", func() {
+					mockGetServiceOperators([]models.MonitoredOperator{{SubscriptionName: "local-storage-operator", Namespace: "openshift-local-storage", Name: "lso", Status: models.OperatorStatusProgressing}})
+					mockGetCSV(
+						models.MonitoredOperator{SubscriptionName: "local-storage-operator", Namespace: "openshift-local-storage", Name: "lso"},
+						&olmv1alpha1.ClusterServiceVersion{Status: olmv1alpha1.ClusterServiceVersionStatus{Phase: olmv1alpha1.CSVPhaseSucceeded}},
+					)
+					mockbmclient.EXPECT().UpdateClusterOperator(gomock.Any(), "cluster-id", "lso", models.OperatorStatusAvailable, gomock.Any()).Return(nil).Times(1)
+
+					mockGetServiceOperators([]models.MonitoredOperator{{SubscriptionName: "local-storage-operator", Namespace: "openshift-local-storage", Name: "lso", Status: models.OperatorStatusAvailable}})
+				})
+
 				mockbmclient.EXPECT().CompleteInstallation(gomock.Any(), "cluster-id", true, "").Return(fmt.Errorf("dummy")).Times(1)
 				mockbmclient.EXPECT().CompleteInstallation(gomock.Any(), "cluster-id", true, "").Return(nil).Times(1)
 
-				// Patching NS
-				mockk8sclient.EXPECT().PatchNamespace(defaultTestControllerConf.Namespace, aiNamespaceRunlevelPatch).Return(nil)
-
 				wg.Add(1)
-				assistedController.PostInstallConfigs(context.TODO(), &wg, status)
+				assistedController.PostInstallConfigs(context.TODO(), &wg)
 				wg.Wait()
-				Expect(status.HasError()).Should(Equal(false))
+				Expect(assistedController.Status.HasError()).Should(Equal(false))
+				Expect(assistedController.Status.HasOperatorError()).Should(Equal(false))
 			})
-			It("waiting for single OLM operator which timeouts", func() {
-				setControllerWaitForOLMOperators(assistedController.ClusterID)
 
-				mockbmclient.EXPECT().DownloadFile(gomock.Any(), "custom_manifests.yaml", gomock.Any()).Return(nil).Times(1)
-				mockbmclient.EXPECT().DownloadFile(gomock.Any(), "kubeconfig-noingress", gomock.Any()).Return(nil).Times(1)
-				mockops.EXPECT().CreateManifests(gomock.Any(), gomock.Any()).Return(nil).Times(1)
-				mockbmclient.EXPECT().GetClusterMonitoredOLMOperators(gomock.Any(), gomock.Any()).Return(
-					[]models.MonitoredOperator{{SubscriptionName: "local-storage-operator", Namespace: "openshift-local-storage", OperatorType: models.OperatorTypeOlm, Name: "lso", Status: models.OperatorStatusProgressing, TimeoutSeconds: 1}}, nil,
-				).AnyTimes()
-				mockk8sclient.EXPECT().GetCSVFromSubscription("openshift-local-storage", "local-storage-operator").Return("lso-1.1", nil).AnyTimes()
-				mockk8sclient.EXPECT().GetCSV("openshift-local-storage", "lso-1.1").Return(&olmv1alpha1.ClusterServiceVersion{Status: olmv1alpha1.ClusterServiceVersionStatus{Phase: olmv1alpha1.CSVPhaseInstalling}}, nil).AnyTimes()
-				mockbmclient.EXPECT().UpdateClusterOperator(gomock.Any(), "cluster-id", "lso", models.OperatorStatusProgressing, gomock.Any()).Return(nil).AnyTimes()
+			It("waiting for single OLM operator which timeouts", func() {
+				By("setup", func() {
+					setControllerWaitForOLMOperators(assistedController.ClusterID)
+					operators := []models.MonitoredOperator{{SubscriptionName: "local-storage-operator", Namespace: "openshift-local-storage", OperatorType: models.OperatorTypeOlm, Name: "lso", Status: models.OperatorStatusProgressing, TimeoutSeconds: 0}}
+					mockApplyPostInstallManifests(operators)
+					mockbmclient.EXPECT().GetClusterMonitoredOLMOperators(gomock.Any(), gomock.Any()).Return(operators, nil).AnyTimes()
+				})
+
+				By("endless empty status", func() {
+					mockbmclient.EXPECT().GetClusterMonitoredOperator(gomock.Any(), gomock.Any(), "lso").Return(&models.MonitoredOperator{Name: "lso", Status: ""}, nil).AnyTimes()
+					mockk8sclient.EXPECT().GetCSVFromSubscription("openshift-local-storage", "local-storage-operator").Return("lso-1.1", nil).AnyTimes()
+					mockk8sclient.EXPECT().GetCSV("openshift-local-storage", "lso-1.1").Return(&olmv1alpha1.ClusterServiceVersion{Status: olmv1alpha1.ClusterServiceVersionStatus{Phase: olmv1alpha1.CSVPhaseInstalling}}, nil).AnyTimes()
+					mockbmclient.EXPECT().UpdateClusterOperator(gomock.Any(), "cluster-id", "lso", models.OperatorStatusProgressing, gomock.Any()).Return(nil).AnyTimes()
+				})
+
 				mockbmclient.EXPECT().UpdateClusterOperator(gomock.Any(), "cluster-id", "lso", models.OperatorStatusFailed, "Waiting for operator timed out").Return(nil).Times(1)
 				mockbmclient.EXPECT().CompleteInstallation(gomock.Any(), "cluster-id", true, "").Return(nil).Times(1)
 
-				// Patching NS
-				mockk8sclient.EXPECT().PatchNamespace(defaultTestControllerConf.Namespace, aiNamespaceRunlevelPatch).Return(nil)
-
 				wg.Add(1)
-				assistedController.PostInstallConfigs(context.TODO(), &wg, status)
+				assistedController.PostInstallConfigs(context.TODO(), &wg)
 				wg.Wait()
-				Expect(status.HasError()).Should(Equal(false))
+				Expect(assistedController.Status.HasError()).Should(Equal(false))
+				Expect(assistedController.Status.GetOperatorsInError()).To(ContainElement("lso"))
 			})
 		})
 	})
@@ -813,7 +962,7 @@ var _ = Describe("installer HostRoleMaster role", func() {
 			mockk8sclient.EXPECT().GetPods(assistedController.Namespace, gomock.Any(), fmt.Sprintf("status.phase=%s", v1.PodRunning)).Return(nil, fmt.Errorf("dummy")).MinTimes(2).MaxTimes(10)
 			ctx, cancel := context.WithCancel(context.Background())
 			wg.Add(1)
-			go assistedController.UploadLogs(ctx, &wg, status)
+			go assistedController.UploadLogs(ctx, &wg)
 			time.Sleep(1 * time.Second)
 			cancel()
 			wg.Wait()
@@ -823,9 +972,10 @@ var _ = Describe("installer HostRoleMaster role", func() {
 			reportLogProgressSuccess()
 			mockk8sclient.EXPECT().GetPods(assistedController.Namespace, gomock.Any(), fmt.Sprintf("status.phase=%s", v1.PodRunning)).Return([]v1.Pod{pod}, nil).MinTimes(1)
 			mockk8sclient.EXPECT().GetPodLogsAsBuffer(assistedController.Namespace, "test", gomock.Any()).Return(nil, fmt.Errorf("dummy")).MinTimes(1)
+			mockbmclient.EXPECT().UploadLogs(gomock.Any(), assistedController.ClusterID, models.LogsTypeController, gomock.Any()).Return(nil).MinTimes(1)
 			ctx, cancel := context.WithCancel(context.Background())
 			wg.Add(1)
-			go assistedController.UploadLogs(ctx, &wg, status)
+			go assistedController.UploadLogs(ctx, &wg)
 			time.Sleep(500 * time.Millisecond)
 			cancel()
 			wg.Wait()
@@ -837,7 +987,7 @@ var _ = Describe("installer HostRoleMaster role", func() {
 			mockbmclient.EXPECT().UploadLogs(gomock.Any(), assistedController.ClusterID, models.LogsTypeController, gomock.Any()).Return(fmt.Errorf("dummy")).Times(1)
 			logClusterOperatorsSuccess()
 			reportLogProgressSuccess()
-			err := assistedController.uploadSummaryLogs("test", assistedController.Namespace, controllerLogsSecondsAgo, false, "")
+			err := assistedController.uploadSummaryLogs("test", assistedController.Namespace, controllerLogsSecondsAgo)
 			Expect(err).To(HaveOccurred())
 		})
 		It("Validate upload logs happy flow (controllers logs only)", func() {
@@ -846,7 +996,7 @@ var _ = Describe("installer HostRoleMaster role", func() {
 			mockbmclient.EXPECT().UploadLogs(gomock.Any(), assistedController.ClusterID, models.LogsTypeController, gomock.Any()).Return(nil).Times(1)
 			logClusterOperatorsSuccess()
 			reportLogProgressSuccess()
-			err := assistedController.uploadSummaryLogs("test", assistedController.Namespace, controllerLogsSecondsAgo, false, "")
+			err := assistedController.uploadSummaryLogs("test", assistedController.Namespace, controllerLogsSecondsAgo)
 			Expect(err).NotTo(HaveOccurred())
 		})
 
@@ -856,7 +1006,7 @@ var _ = Describe("installer HostRoleMaster role", func() {
 			r := bytes.NewBuffer([]byte("test"))
 			mockk8sclient.EXPECT().GetPodLogsAsBuffer(assistedController.Namespace, "test", gomock.Any()).Return(r, nil).Times(1)
 			mockbmclient.EXPECT().UploadLogs(gomock.Any(), assistedController.ClusterID, models.LogsTypeController, gomock.Any()).Return(nil).Times(1)
-			err := assistedController.uploadSummaryLogs("test", assistedController.Namespace, controllerLogsSecondsAgo, false, "")
+			err := assistedController.uploadSummaryLogs("test", assistedController.Namespace, controllerLogsSecondsAgo)
 			Expect(err).NotTo(HaveOccurred())
 		})
 
@@ -869,7 +1019,7 @@ var _ = Describe("installer HostRoleMaster role", func() {
 
 		callUploadLogs := func(waitTime time.Duration) {
 			wg.Add(1)
-			go assistedController.UploadLogs(ctx, &wg, status)
+			go assistedController.UploadLogs(ctx, &wg)
 			time.Sleep(waitTime)
 			cancel()
 			wg.Wait()
@@ -898,8 +1048,8 @@ var _ = Describe("installer HostRoleMaster role", func() {
 			successUpload()
 			logClusterOperatorsSuccess()
 			mockops.EXPECT().GetMustGatherLogs(gomock.Any(), gomock.Any(), assistedController.MustGatherImage).Return("../../test_files/tartest.tar.gz", nil).Times(1)
-			mockbmclient.EXPECT().DownloadFile(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(1)
-			status.Error()
+			mockbmclient.EXPECT().DownloadClusterCredentials(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(1)
+			assistedController.Status.Error()
 			callUploadLogs(150 * time.Millisecond)
 		})
 
@@ -907,14 +1057,14 @@ var _ = Describe("installer HostRoleMaster role", func() {
 			successUpload()
 			logClusterOperatorsSuccess()
 			mockops.EXPECT().GetMustGatherLogs(gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
-			mockbmclient.EXPECT().DownloadFile(gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
+			mockbmclient.EXPECT().DownloadClusterCredentials(gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
 			callUploadLogs(50 * time.Millisecond)
 		})
 
 		It("Validate upload logs exits with no error + failed upload", func() {
 			logClusterOperatorsSuccess()
 			mockops.EXPECT().GetMustGatherLogs(gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
-			mockbmclient.EXPECT().DownloadFile(gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
+			mockbmclient.EXPECT().DownloadClusterCredentials(gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
 			mockbmclient.EXPECT().UploadLogs(gomock.Any(), assistedController.ClusterID, models.LogsTypeController, gomock.Any()).Return(fmt.Errorf("dummy")).AnyTimes()
 			callUploadLogs(50 * time.Millisecond)
 		})
@@ -924,77 +1074,222 @@ var _ = Describe("installer HostRoleMaster role", func() {
 			logClusterOperatorsSuccess()
 			mockops.EXPECT().GetMustGatherLogs(gomock.Any(), gomock.Any(), gomock.Any()).Return("", fmt.Errorf("failed"))
 			mockops.EXPECT().GetMustGatherLogs(gomock.Any(), gomock.Any(), gomock.Any()).Return("../../test_files/tartest.tar.gz", nil)
-			mockbmclient.EXPECT().DownloadFile(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(2)
-			status.Error()
+			mockbmclient.EXPECT().DownloadClusterCredentials(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(2)
+			assistedController.Status.Error()
 			callUploadLogs(50 * time.Millisecond)
+		})
+	})
+
+	Context("must-gather image set parsing", func() {
+		var ac *controller
+		BeforeEach(func() {
+			ac = NewController(l, defaultTestControllerConf, mockops, mockbmclient, mockk8sclient)
+		})
+
+		It("MustGatherImage is empty", func() {
+			ac.MustGatherImage = ""
+			Expect(ac.parseMustGatherImages()).To(BeEmpty())
+		})
+		It("MustGatherImage is string", func() {
+			images := ac.parseMustGatherImages()
+			Expect(images).NotTo(BeEmpty())
+			Expect(images[0]).To(Equal(ac.MustGatherImage))
+		})
+		It("MustGatherImage is json", func() {
+			ac.MustGatherImage = `{"ocp": "quay.io/openshift/must-gather", "cnv": "blah", "ocs": "foo"}`
+			ac.Status.Error()
+			ac.Status.OperatorError("cnv")
+			images := ac.parseMustGatherImages()
+			Expect(len(images)).To(Equal(2))
+			Expect(images).To(ContainElement("quay.io/openshift/must-gather"))
+			Expect(images).To(ContainElement("blah"))
 		})
 	})
 
 	Context("getMaximumOLMTimeout", func() {
 		It("Return general timeout if no OLM's present", func() {
-			mockbmclient.EXPECT().GetClusterMonitoredOLMOperators(gomock.Any(), gomock.Any()).Return([]models.MonitoredOperator{}, nil).Times(1)
-			Expect(assistedController.getMaximumOLMTimeout()).To(Equal(WaitTimeout))
-		})
-
-		It("Return general timeout if assisted service is not reacheble", func() {
-			mockbmclient.EXPECT().GetClusterMonitoredOLMOperators(gomock.Any(), gomock.Any()).Return(nil, fmt.Errorf("error")).Times(1)
-			Expect(assistedController.getMaximumOLMTimeout()).To(Equal(WaitTimeout))
+			opertors := []models.MonitoredOperator{}
+			Expect(assistedController.getMaximumOLMTimeout(opertors)).To(Equal(WaitTimeout))
 		})
 
 		It("Return general timeout if OLM's timeout is lower", func() {
-			mockbmclient.EXPECT().GetClusterMonitoredOLMOperators(gomock.Any(), gomock.Any()).Return([]models.MonitoredOperator{}, nil).Times(1)
-			Expect(assistedController.getMaximumOLMTimeout()).To(Equal(WaitTimeout))
+			opertors := []models.MonitoredOperator{
+				{
+					TimeoutSeconds: 0,
+				},
+			}
+
+			Expect(assistedController.getMaximumOLMTimeout(opertors)).To(Equal(WaitTimeout))
 		})
 
 		It("Return maximum from multiple OLM's", func() {
-			mockbmclient.EXPECT().GetClusterMonitoredOLMOperators(gomock.Any(), gomock.Any()).Return(
-				[]models.MonitoredOperator{
-					{OperatorType: models.OperatorTypeOlm, TimeoutSeconds: 120 * 60},
-					{OperatorType: models.OperatorTypeOlm, TimeoutSeconds: 130 * 60},
-				}, nil,
-			).Times(1)
-			Expect(assistedController.getMaximumOLMTimeout()).To(Equal(130 * 60 * time.Second))
+			opertors := []models.MonitoredOperator{
+				{OperatorType: models.OperatorTypeOlm, TimeoutSeconds: 120 * 60},
+				{OperatorType: models.OperatorTypeOlm, TimeoutSeconds: 130 * 60},
+			}
+			Expect(assistedController.getMaximumOLMTimeout(opertors)).To(Equal(130 * 60 * time.Second))
 		})
 	})
 
 	Context("waitForOLMOperators", func() {
-		It("Don't wait if OLM operators list is empty", func() {
-			mockbmclient.EXPECT().GetClusterMonitoredOLMOperators(gomock.Any(), gomock.Any()).Return(
-				[]models.MonitoredOperator{}, nil,
-			).Times(1)
-			Expect(assistedController.waitForOLMOperators()).To(Equal(true))
+		var (
+			operatorName     = "lso"
+			subscriptionName = "local-storage-operator"
+			namespaceName    = "openshift-local-storage"
+		)
+
+		BeforeEach(func() {
+			GeneralWaitInterval = 100 * time.Millisecond
+			WaitTimeout = 150 * time.Millisecond
 		})
-		It("Don't wait if OLM operator available", func() {
-			mockbmclient.EXPECT().GetClusterMonitoredOLMOperators(gomock.Any(), gomock.Any()).Return(
-				[]models.MonitoredOperator{{Status: models.OperatorStatusAvailable, OperatorType: models.OperatorTypeOlm}}, nil,
-			).Times(1)
-			Expect(assistedController.waitForOLMOperators()).To(Equal(true))
+
+		It("List is empty", func() {
+			mockbmclient.EXPECT().GetClusterMonitoredOLMOperators(gomock.Any(), gomock.Any()).Return([]models.MonitoredOperator{}, nil).Times(1)
+			Expect(assistedController.waitForOLMOperators(context.TODO())).To(BeNil())
 		})
-		It("Don't wait if OLM operator failed", func() {
-			mockbmclient.EXPECT().GetClusterMonitoredOLMOperators(gomock.Any(), gomock.Any()).Return(
-				[]models.MonitoredOperator{{Status: models.OperatorStatusFailed, OperatorType: models.OperatorTypeOlm}}, nil,
-			).Times(1)
-			Expect(assistedController.waitForOLMOperators()).To(Equal(true))
+		It("progressing - no update (empty message)", func() {
+			operators := []models.MonitoredOperator{
+				{
+					SubscriptionName: subscriptionName, Namespace: namespaceName,
+					Name: operatorName, Status: models.OperatorStatusProgressing, OperatorType: models.OperatorTypeOlm,
+				},
+			}
+
+			mockGetOLMOperators(operators)
+			mockGetServiceOperators(operators)
+			mockGetCSV(
+				operators[0],
+				&olmv1alpha1.ClusterServiceVersion{Status: olmv1alpha1.ClusterServiceVersionStatus{Phase: olmv1alpha1.CSVPhaseInstalling}},
+			)
+			Expect(assistedController.waitForCSV(context.TODO(), WaitTimeout)).To(HaveOccurred())
 		})
-		It("Wait if OLM operator progressing and k8s unavailable", func() {
-			mockbmclient.EXPECT().GetClusterMonitoredOLMOperators(gomock.Any(), gomock.Any()).Return(
-				[]models.MonitoredOperator{{Name: "lso", Status: models.OperatorStatusProgressing, OperatorType: models.OperatorTypeOlm}}, nil,
-			).Times(1)
-			mockk8sclient.EXPECT().GetCSVFromSubscription(gomock.Any(), gomock.Any()).Return("", fmt.Errorf("Error")).Times(1)
-			Expect(assistedController.waitForOLMOperators()).To(Equal(false))
+		It("progressing - no update (same message)", func() {
+			operators := []models.MonitoredOperator{
+				{
+					SubscriptionName: subscriptionName, Namespace: namespaceName,
+					Name: operatorName, Status: models.OperatorStatusProgressing, OperatorType: models.OperatorTypeOlm,
+					StatusInfo: "same",
+				},
+			}
+
+			mockGetOLMOperators(operators)
+			mockGetServiceOperators(operators)
+			mockGetCSV(
+				operators[0],
+				&olmv1alpha1.ClusterServiceVersion{
+					Status: olmv1alpha1.ClusterServiceVersionStatus{Phase: olmv1alpha1.CSVPhaseInstalling, Message: "same"},
+				},
+			)
+			Expect(assistedController.waitForCSV(context.TODO(), WaitTimeout)).To(HaveOccurred())
 		})
-		It("Wait if OLM operator progressing", func() {
-			mockbmclient.EXPECT().GetClusterMonitoredOLMOperators(gomock.Any(), gomock.Any()).Return(
-				[]models.MonitoredOperator{{SubscriptionName: "local-storage-operator", Namespace: "openshift-local-storage", Name: "lso", Status: models.OperatorStatusProgressing, OperatorType: models.OperatorTypeOlm}}, nil,
-			).Times(1)
-			mockk8sclient.EXPECT().GetCSVFromSubscription("openshift-local-storage", "local-storage-operator").Return("lso-1.1", nil).Times(1)
-			mockk8sclient.EXPECT().GetCSV("openshift-local-storage", "lso-1.1").Return(&olmv1alpha1.ClusterServiceVersion{}, nil).Times(1)
-			mockbmclient.EXPECT().UpdateClusterOperator(gomock.Any(), "cluster-id", "lso", gomock.Any(), gomock.Any()).Return(nil).Times(1)
-			Expect(assistedController.waitForOLMOperators()).To(Equal(false))
+		It("progressing - update (new message)", func() {
+			operators := []models.MonitoredOperator{
+				{
+					SubscriptionName: subscriptionName, Namespace: namespaceName,
+					Name: operatorName, Status: models.OperatorStatusProgressing, OperatorType: models.OperatorTypeOlm,
+					StatusInfo: "old",
+				},
+			}
+
+			mockGetOLMOperators(operators)
+			mockGetServiceOperators(operators)
+			mockGetCSV(
+				operators[0],
+				&olmv1alpha1.ClusterServiceVersion{
+					Status: olmv1alpha1.ClusterServiceVersionStatus{Phase: olmv1alpha1.CSVPhaseInstalling, Message: "new"},
+				},
+			)
+
+			mockbmclient.EXPECT().UpdateClusterOperator(gomock.Any(), "cluster-id", operatorName, gomock.Any(), gomock.Any()).Return(nil).Times(1)
+			Expect(assistedController.waitForCSV(context.TODO(), WaitTimeout)).To(HaveOccurred())
+		})
+		It("check that we tolerate the failed state reported by CSV", func() {
+			WaitTimeout = WaitTimeout * 10
+
+			operators := []models.MonitoredOperator{
+				{
+					SubscriptionName: subscriptionName, Namespace: namespaceName,
+					OperatorType: models.OperatorTypeOlm, Name: operatorName, Status: models.OperatorStatusProgressing, TimeoutSeconds: 1,
+				},
+			}
+
+			mockGetOLMOperators(operators)
+
+			mockGetServiceOperators(operators)
+			mockGetCSV(
+				operators[0],
+				&olmv1alpha1.ClusterServiceVersion{Status: olmv1alpha1.ClusterServiceVersionStatus{Phase: olmv1alpha1.CSVPhaseFailed}},
+			)
+
+			mockGetServiceOperators(operators)
+			mockGetCSV(
+				operators[0],
+				&olmv1alpha1.ClusterServiceVersion{Status: olmv1alpha1.ClusterServiceVersionStatus{Phase: olmv1alpha1.CSVPhaseSucceeded}},
+			)
+			mockbmclient.EXPECT().UpdateClusterOperator(gomock.Any(), gomock.Any(), operatorName, models.OperatorStatusAvailable, gomock.Any()).Return(nil).Times(1)
+
+			newOperators := make([]models.MonitoredOperator, 0)
+			newOperators = append(newOperators, operators...)
+			newOperators[0].Status = models.OperatorStatusAvailable
+			mockGetServiceOperators(newOperators)
+			Expect(assistedController.waitForCSV(context.TODO(), LongWaitTimeout)).To(BeNil())
+		})
+
+		It("multiple OLMs", func() {
+			operators := []models.MonitoredOperator{
+				{
+					SubscriptionName: "subscription-1", Namespace: "namespace-1",
+					OperatorType: models.OperatorTypeOlm, Name: "operator-1", Status: models.OperatorStatusProgressing, TimeoutSeconds: 120 * 60,
+				},
+				{
+					SubscriptionName: "subscription-2", Namespace: "namespace-2",
+					OperatorType: models.OperatorTypeOlm, Name: "operator-2", Status: models.OperatorStatusProgressing, TimeoutSeconds: 120 * 60,
+				},
+				{
+					SubscriptionName: "subscription-3", Namespace: "namespace-3",
+					OperatorType: models.OperatorTypeOlm, Name: "operator-3", Status: models.OperatorStatusProgressing, TimeoutSeconds: 120 * 60,
+				},
+			}
+
+			mockGetOLMOperators(operators)
+
+			By("first is available", func() {
+				newOperators := make([]models.MonitoredOperator, 0)
+				newOperators = append(newOperators, operators...)
+				newOperators[0].Status = models.OperatorStatusAvailable
+				mockGetServiceOperators(newOperators)
+
+				mockGetCSV(
+					newOperators[1],
+					&olmv1alpha1.ClusterServiceVersion{Status: olmv1alpha1.ClusterServiceVersionStatus{Phase: olmv1alpha1.CSVPhaseInstalling}},
+				)
+				mockGetCSV(
+					newOperators[2],
+					&olmv1alpha1.ClusterServiceVersion{Status: olmv1alpha1.ClusterServiceVersionStatus{Phase: olmv1alpha1.CSVPhaseInstalling}},
+				)
+			})
+
+			By("last is available", func() {
+				newerOperators := make([]models.MonitoredOperator, 0)
+				newerOperators = append(newerOperators, operators[1], operators[2])
+				newerOperators[1].Status = models.OperatorStatusAvailable
+				mockGetServiceOperators(newerOperators)
+
+				mockGetCSV(
+					newerOperators[0],
+					&olmv1alpha1.ClusterServiceVersion{Status: olmv1alpha1.ClusterServiceVersionStatus{Phase: olmv1alpha1.CSVPhaseInstalling}},
+				)
+			})
+
+			lastOne := []models.MonitoredOperator{operators[1]}
+			lastOne[0].Status = models.OperatorStatusAvailable
+			mockGetServiceOperators(lastOne)
+
+			Expect(assistedController.waitForCSV(context.TODO(), LongWaitTimeout)).To(BeNil())
 		})
 	})
 
-	Context("waitingForClusterVersion", func() {
+	Context("waitingForClusterOperators", func() {
 		ctx := context.TODO()
 		tests := []struct {
 			name                    string
@@ -1064,8 +1359,12 @@ var _ = Describe("installer HostRoleMaster role", func() {
 		}
 
 		BeforeEach(func() {
+			assistedController.WaitForClusterVersion = true
 			GeneralProgressUpdateInt = 100 * time.Millisecond
 			WaitTimeout = 150 * time.Millisecond
+			CVOMaxTimeout = 1 * time.Second
+
+			mockGetServiceOperators([]models.MonitoredOperator{{Name: consoleOperatorName, Status: models.OperatorStatusAvailable}})
 		})
 
 		for i := range tests {
@@ -1081,28 +1380,26 @@ var _ = Describe("installer HostRoleMaster role", func() {
 					StatusInfo: t.newCVOCondition.Message,
 				}
 
-				amountOfSamples := 1
-
 				mockbmclient.EXPECT().GetClusterMonitoredOperator(gomock.Any(), gomock.Any(), cvoOperatorName).Return(t.currentServiceCVOStatus, nil).Times(1)
 
 				if t.shouldSendUpdate {
 					if t.currentServiceCVOStatus.Status != models.OperatorStatusAvailable {
-						// If a change occured and it is still false - we expect the timer to be resetted,
-						// hence another round would happen.
-						amountOfSamples += 1
-
 						mockbmclient.EXPECT().GetClusterMonitoredOperator(gomock.Any(), gomock.Any(), cvoOperatorName).Return(newServiceCVOStatus, nil).Times(1)
 					}
 
 					mockbmclient.EXPECT().UpdateClusterOperator(gomock.Any(), gomock.Any(), cvoOperatorName, gomock.Any(), gomock.Any()).Times(1)
 				}
 
-				mockk8sclient.EXPECT().GetClusterVersion("version").Return(clusterVersionReport, nil).Times(amountOfSamples)
+				amountOfSamples := 0
+				if t.currentServiceCVOStatus.Status != models.OperatorStatusAvailable {
+					amountOfSamples++
+				}
+				mockk8sclient.EXPECT().GetClusterVersion(clusterVersionName).Return(clusterVersionReport, nil).MinTimes(amountOfSamples)
 
 				if newServiceCVOStatus.Status == models.OperatorStatusAvailable {
-					Expect(assistedController.waitingForClusterVersion(ctx)).ShouldNot(HaveOccurred())
+					Expect(assistedController.waitingForClusterOperators(ctx)).ShouldNot(HaveOccurred())
 				} else {
-					Expect(assistedController.waitingForClusterVersion(ctx)).Should(HaveOccurred())
+					Expect(assistedController.waitingForClusterOperators(ctx)).Should(HaveOccurred())
 				}
 			})
 		}
@@ -1117,14 +1414,37 @@ var _ = Describe("installer HostRoleMaster role", func() {
 				},
 			}
 
-			mockk8sclient.EXPECT().GetClusterVersion("version").Return(clusterVersionReport, nil).AnyTimes()
+			mockk8sclient.EXPECT().GetClusterVersion(clusterVersionName).Return(clusterVersionReport, nil).AnyTimes()
 			mockbmclient.EXPECT().GetClusterMonitoredOperator(gomock.Any(), gomock.Any(), cvoOperatorName).Return(currentServiceCVOStatus, nil).AnyTimes()
 			mockbmclient.EXPECT().UpdateClusterOperator(gomock.Any(), gomock.Any(), cvoOperatorName, gomock.Any(), gomock.Any()).AnyTimes()
 
 			err := func() error {
-				ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+				ctxTimeout, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 				defer cancel()
-				return assistedController.waitingForClusterVersion(ctx)
+				return assistedController.waitingForClusterOperators(ctxTimeout)
+			}()
+
+			Expect(errors.Is(err, context.DeadlineExceeded)).To(BeTrue())
+		})
+
+		It("service fail to sync - maxTimeout applied", func() {
+			WaitTimeout = 1 * time.Second
+			CVOMaxTimeout = 200 * time.Millisecond
+			currentServiceCVOStatus := &models.MonitoredOperator{Status: models.OperatorStatusProgressing, StatusInfo: ""}
+			clusterVersionReport := &configv1.ClusterVersion{
+				Status: configv1.ClusterVersionStatus{
+					Conditions: []configv1.ClusterOperatorStatusCondition{
+						{Type: configv1.OperatorAvailable, Status: configv1.ConditionTrue, Message: ""},
+					},
+				},
+			}
+
+			mockk8sclient.EXPECT().GetClusterVersion(clusterVersionName).Return(clusterVersionReport, nil).AnyTimes()
+			mockbmclient.EXPECT().GetClusterMonitoredOperator(gomock.Any(), gomock.Any(), cvoOperatorName).Return(currentServiceCVOStatus, nil).AnyTimes()
+			mockbmclient.EXPECT().UpdateClusterOperator(gomock.Any(), gomock.Any(), cvoOperatorName, gomock.Any(), gomock.Any()).AnyTimes()
+
+			err := func() error {
+				return assistedController.waitingForClusterOperators(ctx)
 			}()
 
 			Expect(errors.Is(err, context.DeadlineExceeded)).To(BeTrue())
@@ -1142,14 +1462,14 @@ var _ = Describe("installer HostRoleMaster role", func() {
 			}
 
 			// Fail twice
-			mockk8sclient.EXPECT().GetClusterVersion("version").Return(clusterVersionReport, nil).Times(3)
+			mockk8sclient.EXPECT().GetClusterVersion(clusterVersionName).Return(clusterVersionReport, nil).Times(2)
 			mockbmclient.EXPECT().GetClusterMonitoredOperator(gomock.Any(), gomock.Any(), cvoOperatorName).Return(currentServiceCVOStatus, nil).Times(2)
 			mockbmclient.EXPECT().UpdateClusterOperator(gomock.Any(), gomock.Any(), cvoOperatorName, gomock.Any(), gomock.Any()).Times(2)
 
 			// Service succeed
 			mockbmclient.EXPECT().GetClusterMonitoredOperator(gomock.Any(), gomock.Any(), cvoOperatorName).Return(newServiceCVOStatus, nil).Times(1)
 
-			Expect(assistedController.waitingForClusterVersion(context.TODO())).ShouldNot(HaveOccurred())
+			Expect(assistedController.waitingForClusterOperators(context.TODO())).ShouldNot(HaveOccurred())
 		})
 	})
 
@@ -1175,8 +1495,12 @@ var _ = Describe("installer HostRoleMaster role", func() {
 			mockk8sclient.EXPECT().GetServiceNetworks().Return(nil, errors.New("get service network failed"))
 			hackConflict()
 		})
-		It("Exit if service network is IPv6", func() {
+		It("Kill service and DNS pods if DNS service IP is taken in IPV6 env", func() {
 			mockk8sclient.EXPECT().GetServiceNetworks().Return([]string{"2002:db8::/64"}, nil)
+			returnServiceWithAddress(conflictServiceName, conflictServiceNamespace, "2002:db8::a")
+			mockk8sclient.EXPECT().DeleteService(conflictServiceName, conflictServiceNamespace).Return(nil)
+			mockk8sclient.EXPECT().DeletePods(dnsOperatorNamespace).Return(nil)
+			returnServiceWithAddress(dnsServiceName, dnsServiceNamespace, "2002:db8::a")
 			hackConflict()
 		})
 		It("Retry if list services fails", func() {
@@ -1273,11 +1597,12 @@ func getClusterOperatorWithConditionsStatus(availableStatus, degradedStatus conf
 
 func create3Hosts(currentStatus string, stage models.HostStage) map[string]inventory_client.HostData {
 	currentState := models.HostProgressInfo{CurrentStage: stage}
+	infraEnvId := strfmt.UUID("7916fa89-ea7a-443e-a862-b3e930309f50")
 	node0Id := strfmt.UUID("7916fa89-ea7a-443e-a862-b3e930309f65")
 	node1Id := strfmt.UUID("eb82821f-bf21-4614-9a3b-ecb07929f238")
 	node2Id := strfmt.UUID("b898d516-3e16-49d0-86a5-0ad5bd04e3ed")
 	return map[string]inventory_client.HostData{
-		"node0": {Host: &models.Host{ID: &node0Id, Progress: &currentState, Status: &currentStatus}},
-		"node1": {Host: &models.Host{ID: &node1Id, Progress: &currentState, Status: &currentStatus}},
-		"node2": {Host: &models.Host{ID: &node2Id, Progress: &currentState, Status: &currentStatus}}}
+		"node0": {Host: &models.Host{InfraEnvID: infraEnvId, ID: &node0Id, Progress: &currentState, Status: &currentStatus}},
+		"node1": {Host: &models.Host{InfraEnvID: infraEnvId, ID: &node1Id, Progress: &currentState, Status: &currentStatus}},
+		"node2": {Host: &models.Host{InfraEnvID: infraEnvId, ID: &node2Id, Progress: &currentState, Status: &currentStatus}}}
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"strconv"
 	"text/template"
 
@@ -43,11 +44,11 @@ type Ops interface {
 	UploadInstallationLogs(isBootstrap bool) (string, error)
 	ReloadHostFile(filepath string) error
 	CreateOpenshiftSshManifest(filePath, template, sshPubKeyPath string) error
-	GetMustGatherLogs(workDir, kubeconfigPath, mustGatherImg string) (string, error)
+	GetMustGatherLogs(workDir, kubeconfigPath string, images ...string) (string, error)
 	CreateRandomHostname(hostname string) error
 	GetHostname() (string, error)
 	EvaluateDiskSymlink(string) string
-	CreateManifests(string, string) error
+	CreateManifests(string, []byte) error
 }
 
 const (
@@ -101,17 +102,20 @@ type ExecCommandError struct {
 	WaitStatus int
 }
 
+func removePullSecret(s []string) []string {
+	return strings.Split(strings.ReplaceAll(strings.Join(s, " "), config.GlobalConfig.PullSecretToken, "<SECRET>"), " ")
+}
+
 func (e *ExecCommandError) Error() string {
 	lastOutput := e.Output
 	if len(e.Output) > 200 {
 		lastOutput = "... " + e.Output[len(e.Output)-200:]
 	}
-
-	return fmt.Sprintf("failed executing %s %v, Error %s, LastOutput \"%s\"", e.Command, e.Args, e.ExitErr, lastOutput)
+	return fmt.Sprintf("failed executing %s %v, Error %s, LastOutput \"%s\"", e.Command, removePullSecret(e.Args), e.ExitErr, lastOutput)
 }
 
 func (e *ExecCommandError) DetailedError() string {
-	return fmt.Sprintf("failed executing %s %v, env vars %v, error %s, waitStatus %d, Output \"%s\"", e.Command, e.Args, e.Env, e.ExitErr, e.WaitStatus, e.Output)
+	return fmt.Sprintf("failed executing %s %v, env vars %v, error %s, waitStatus %d, Output \"%s\"", e.Command, removePullSecret(e.Args), removePullSecret(e.Env), e.ExitErr, e.WaitStatus, e.Output)
 }
 
 // ExecCommand executes command.
@@ -156,7 +160,7 @@ func (o *ops) ExecCommand(liveLogger io.Writer, command string, args ...string) 
 		}
 		return output, execErr
 	}
-	o.log.Debug("Command executed:", " command", command, " arguments", args, "env vars", cmd.Env, "output", output)
+	o.log.Debug("Command executed:", " command", command, " arguments", removePullSecret(args), "env vars", removePullSecret(cmd.Env), "output", output)
 	return output, err
 }
 
@@ -178,7 +182,7 @@ func (o *ops) SystemctlAction(action string, args ...string) error {
 func (o *ops) WriteImageToDisk(ignitionPath string, device string, progressReporter inventory_client.InventoryClient, extraArgs []string) error {
 	allArgs := installerArgs(ignitionPath, device, extraArgs)
 	o.log.Infof("Writing image and ignition to disk with arguments: %v", allArgs)
-	_, err := o.ExecPrivilegeCommand(NewCoreosInstallerLogWriter(o.log, progressReporter, config.GlobalConfig.HostID),
+	_, err := o.ExecPrivilegeCommand(NewCoreosInstallerLogWriter(o.log, progressReporter, config.GlobalConfig.InfraEnvID, config.GlobalConfig.HostID),
 		"coreos-installer", allArgs...)
 	return err
 }
@@ -220,16 +224,16 @@ func (o *ops) Reboot() error {
 }
 
 func (o *ops) SetBootOrder(device string) error {
-	_, err := o.ExecPrivilegeCommand(o.logWriter, "test", "-d", "/sys/firmware/efi")
+	_, err := o.ExecPrivilegeCommand(nil, "test", "-d", "/sys/firmware/efi")
 	if err != nil {
-		o.log.Info("efi not supported")
+		o.log.Info("setting the boot order on BIOS systems is not supported. Skipping...")
 		return nil
 	}
 
 	o.log.Info("Setting efibootmgr to boot from disk")
 
 	// efi-system is installed onto partition 2
-	_, err = o.ExecPrivilegeCommand(o.logWriter, "efibootmgr", "-d", device, "-p", "2", "-c", "-L", "Red Hat Enterprise Linux", "-l", "\\EFI\\redhat\\shimx64.efi")
+	_, err = o.ExecPrivilegeCommand(o.logWriter, "efibootmgr", "-v", "-d", device, "-p", "2", "-c", "-L", "Red Hat Enterprise Linux", "-l", o.getEfiFilePath())
 	if err != nil {
 		o.log.Errorf("Failed to set efibootmgr to boot from disk %s, err: %s", device, err)
 		return err
@@ -237,8 +241,20 @@ func (o *ops) SetBootOrder(device string) error {
 	return nil
 }
 
+func (o *ops) getEfiFilePath() string {
+	var efiFileName string
+	switch runtime.GOARCH {
+	case "arm64":
+		efiFileName = "shimaa64.efi"
+	default:
+		efiFileName = "shimx64.efi"
+	}
+	o.log.Infof("Using EFI file '%s' for GOARCH '%s'", efiFileName, runtime.GOARCH)
+	return fmt.Sprintf("\\EFI\\redhat\\%s", efiFileName)
+}
+
 func (o *ops) ExtractFromIgnition(ignitionPath string, fileToExtract string) error {
-	o.log.Infof("Getting pull secret from %s", ignitionPath)
+	o.log.Infof("Getting data from %s", ignitionPath)
 	ignitionData, err := ioutil.ReadFile(ignitionPath)
 	if err != nil {
 		o.log.Errorf("Error occurred while trying to read %s : %e", ignitionPath, err)
@@ -447,12 +463,16 @@ func (o *ops) GetMCSLogs() (string, error) {
 	return string(logs), nil
 }
 
+// This function actually runs container that imeplements logs_sender command
+// Any change to the assisted-service API that is used by the logs_sender command
+// ( for example UploadLogs), must be reflected here (input parameters, etc'),
+// if needed
 func (o *ops) UploadInstallationLogs(isBootstrap bool) (string, error) {
 	command := "podman"
 	args := []string{"run", "--rm", "--privileged", "--net=host", "--pid=host", "-v", "/run/systemd/journal/socket:/run/systemd/journal/socket",
 		"-v", "/var/log:/var/log", config.GlobalConfig.AgentImage, "logs_sender",
 		"-cluster-id", config.GlobalConfig.ClusterID, "-url", config.GlobalConfig.URL,
-		"-host-id", config.GlobalConfig.HostID,
+		"-host-id", config.GlobalConfig.HostID, "-infra-env-id", config.GlobalConfig.InfraEnvID,
 		"-pull-secret-token", config.GlobalConfig.PullSecretToken,
 		fmt.Sprintf("-insecure=%s", strconv.FormatBool(config.GlobalConfig.SkipCertVerification)),
 		fmt.Sprintf("-bootstrap=%s", strconv.FormatBool(isBootstrap)),
@@ -514,16 +534,13 @@ func (o *ops) CreateOpenshiftSshManifest(filePath, tmpl, sshPubKeyPath string) e
 	return nil
 }
 
-func (o *ops) GetMustGatherLogs(workDir, kubeconfigPath, mustGatherImg string) (string, error) {
+func (o *ops) GetMustGatherLogs(workDir, kubeconfigPath string, images ...string) (string, error) {
 	//invoke oc adm must-gather command in the working directory
-	var imageOption string
-	if mustGatherImg == "" {
-		o.log.Infof("collecting must-gather logs into %s using image from release", workDir)
-		imageOption = ""
-	} else {
-		o.log.Infof("collecting must-gather logs into %s using image %s", workDir, mustGatherImg)
-		imageOption = fmt.Sprintf(" --image=%s", mustGatherImg)
+	var imageOption string = ""
+	for _, img := range images {
+		imageOption = imageOption + fmt.Sprintf(" --image=%s", img)
 	}
+
 	command := fmt.Sprintf("cd %s && oc --kubeconfig=%s adm must-gather%s", workDir, kubeconfigPath, imageOption)
 	output, err := o.ExecCommand(o.logWriter, "bash", "-c", command)
 	if err != nil {
@@ -568,13 +585,26 @@ func (o *ops) GetHostname() (string, error) {
 	return os.Hostname()
 }
 
-func (o *ops) CreateManifests(kubeconfig string, manifestFilePath string) error {
-	command := fmt.Sprintf("oc --kubeconfig=%s apply -f %s", kubeconfig, manifestFilePath)
+func (o *ops) CreateManifests(kubeconfig string, content []byte) error {
+	// Create temp file, where we store the content to be create by oc command:
+	file, err := ioutil.TempFile("", "operator-manifest")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(file.Name())
+
+	// Write the content to the temporary file:
+	if err = ioutil.WriteFile(file.Name(), content, 0644); err != nil {
+		return err
+	}
+
+	// Run oc command that creates the custom manifest:
+	command := fmt.Sprintf("oc --kubeconfig=%s apply -f %s", kubeconfig, file.Name())
 	output, err := o.ExecCommand(o.logWriter, "bash", "-c", command)
 	if err != nil {
 		return err
 	}
-	o.log.Infof("Applying custom manifest file %s succeed %s", manifestFilePath, output)
+	o.log.Infof("Applying custom manifest file %s succeed %s", file.Name(), output)
 
 	return nil
 }

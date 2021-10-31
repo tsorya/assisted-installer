@@ -43,6 +43,7 @@ var _ = Describe("installer HostRoleMaster role", func() {
 		mockIgnition       *ignition.MockIgnition
 		installerObj       *installer
 		hostId             = "host-id"
+		infraEnvId         = "infra-env-id"
 		bootstrapIgn       = "bootstrap.ign"
 		openShiftVersion   = "4.7"
 		inventoryNamesHost map[string]inventory_client.HostData
@@ -65,8 +66,8 @@ var _ = Describe("installer HostRoleMaster role", func() {
 	downloadFileSuccess := func(fileName string) {
 		mockbmclient.EXPECT().DownloadFile(gomock.Any(), fileName, filepath.Join(InstallDir, fileName)).Return(nil).Times(1)
 	}
-	downloadHostIgnitionSuccess := func(hostID string, fileName string) {
-		mockbmclient.EXPECT().DownloadHostIgnition(gomock.Any(), hostID, filepath.Join(InstallDir, fileName)).Return(nil).Times(1)
+	downloadHostIgnitionSuccess := func(infraEnvID string, hostID string, fileName string) {
+		mockbmclient.EXPECT().DownloadHostIgnition(gomock.Any(), infraEnvID, hostID, filepath.Join(InstallDir, fileName)).Return(nil).Times(1)
 	}
 
 	reportLogProgressSuccess := func() {
@@ -89,9 +90,9 @@ var _ = Describe("installer HostRoleMaster role", func() {
 	updateProgressSuccess := func(stages [][]string) {
 		for _, stage := range stages {
 			if len(stage) == 2 {
-				mockbmclient.EXPECT().UpdateHostInstallProgress(gomock.Any(), hostId, models.HostStage(stage[0]), stage[1]).Return(nil).Times(1)
+				mockbmclient.EXPECT().UpdateHostInstallProgress(gomock.Any(), infraEnvId, hostId, models.HostStage(stage[0]), stage[1]).Return(nil).Times(1)
 			} else {
-				mockbmclient.EXPECT().UpdateHostInstallProgress(gomock.Any(), hostId, models.HostStage(stage[0]), "").Return(nil).Times(1)
+				mockbmclient.EXPECT().UpdateHostInstallProgress(gomock.Any(), infraEnvId, hostId, models.HostStage(stage[0]), "").Return(nil).Times(1)
 			}
 		}
 	}
@@ -109,7 +110,7 @@ var _ = Describe("installer HostRoleMaster role", func() {
 	}
 
 	waitForControllerSuccessfully := func(clusterId string) {
-		mockbmclient.EXPECT().UpdateHostInstallProgress(gomock.Any(), hostId, models.HostStageWaitingForController, "waiting for controller pod ready event").Return(nil).Times(1)
+		mockbmclient.EXPECT().UpdateHostInstallProgress(gomock.Any(), infraEnvId, hostId, models.HostStageWaitingForController, "waiting for controller pod ready event").Return(nil).Times(1)
 		mockk8sclient.EXPECT().GetPods("assisted-installer", gomock.Any(), "").Return([]v1.Pod{{TypeMeta: metav1.TypeMeta{},
 			ObjectMeta: metav1.ObjectMeta{Name: common.AssistedControllerPrefix + "aasdasd"},
 			Status:     v1.PodStatus{Phase: "Running"}}}, nil).Times(1)
@@ -133,12 +134,13 @@ var _ = Describe("installer HostRoleMaster role", func() {
 		mockbmclient = inventory_client.NewMockInventoryClient(ctrl)
 		mockk8sclient = k8s_client.NewMockK8SClient(ctrl)
 		mockIgnition = ignition.NewMockIgnition(ctrl)
+		nodesInfraEnvId := strfmt.UUID("7916fa89-ea7a-443e-a862-b3e930309f50")
 		node0Id := strfmt.UUID("7916fa89-ea7a-443e-a862-b3e930309f65")
 		node1Id := strfmt.UUID("eb82821f-bf21-4614-9a3b-ecb07929f238")
 		node2Id := strfmt.UUID("b898d516-3e16-49d0-86a5-0ad5bd04e3ed")
-		inventoryNamesHost = map[string]inventory_client.HostData{"node0": {Host: &models.Host{ID: &node0Id}, IPs: []string{"192.168.126.10"}},
-			"node1": {Host: &models.Host{ID: &node1Id}, IPs: []string{"192.168.126.11"}},
-			"node2": {Host: &models.Host{ID: &node2Id}, IPs: []string{"192.168.126.12"}}}
+		inventoryNamesHost = map[string]inventory_client.HostData{"node0": {Host: &models.Host{InfraEnvID: nodesInfraEnvId, ID: &node0Id}, IPs: []string{"192.168.126.10"}},
+			"node1": {Host: &models.Host{InfraEnvID: nodesInfraEnvId, ID: &node1Id}, IPs: []string{"192.168.126.11"}},
+			"node2": {Host: &models.Host{InfraEnvID: nodesInfraEnvId, ID: &node2Id}, IPs: []string{"192.168.126.12"}}}
 	})
 	k8sBuilder := func(configPath string, logger *logrus.Logger) (k8s_client.K8SClient, error) {
 		return mockk8sclient, nil
@@ -148,6 +150,7 @@ var _ = Describe("installer HostRoleMaster role", func() {
 
 		conf := config.Config{Role: string(models.HostRoleBootstrap),
 			ClusterID:        "cluster-id",
+			InfraEnvID:       "infra-env-id",
 			HostID:           "host-id",
 			Device:           "/dev/vda",
 			URL:              "https://assisted-service.com:80",
@@ -194,11 +197,11 @@ var _ = Describe("installer HostRoleMaster role", func() {
 			mockk8sclient.EXPECT().ListMasterNodes().Return(GetKubeNodes(map[string]string{}), nil).Times(1)
 			kubeNamesIds = map[string]string{"node0": "7916fa89-ea7a-443e-a862-b3e930309f65"}
 			mockk8sclient.EXPECT().ListMasterNodes().Return(GetKubeNodes(kubeNamesIds), nil).Times(1)
-			mockbmclient.EXPECT().UpdateHostInstallProgress(gomock.Any(), inventoryNamesHost["node0"].Host.ID.String(), models.HostStageJoined, "").Times(1)
+			mockbmclient.EXPECT().UpdateHostInstallProgress(gomock.Any(), inventoryNamesHost["node0"].Host.InfraEnvID.String(), inventoryNamesHost["node0"].Host.ID.String(), models.HostStageJoined, "").Times(1)
 			kubeNamesIds = map[string]string{"node0": "7916fa89-ea7a-443e-a862-b3e930309f65",
 				"node1": "eb82821f-bf21-4614-9a3b-ecb07929f238"}
 			mockk8sclient.EXPECT().ListMasterNodes().Return(GetKubeNodes(kubeNamesIds), nil).Times(1)
-			mockbmclient.EXPECT().UpdateHostInstallProgress(gomock.Any(), inventoryNamesHost["node1"].Host.ID.String(), models.HostStageJoined, "").Times(1)
+			mockbmclient.EXPECT().UpdateHostInstallProgress(gomock.Any(), inventoryNamesHost["node1"].Host.InfraEnvID.String(), inventoryNamesHost["node1"].Host.ID.String(), models.HostStageJoined, "").Times(1)
 		}
 		getNetworkTypeSuccessOpenshiftSDN := func() {
 			mockk8sclient.EXPECT().GetNetworkType().Return("OpenshiftSDN", nil).Times(2)
@@ -219,7 +222,7 @@ var _ = Describe("installer HostRoleMaster role", func() {
 			mockops.EXPECT().PrepareController().Return(nil).Times(1)
 		}
 		waitForBootkubeSuccess := func() {
-			mockbmclient.EXPECT().UpdateHostInstallProgress(gomock.Any(), hostId, models.HostStageWaitingForBootkube, "").Return(nil).Times(1)
+			mockbmclient.EXPECT().UpdateHostInstallProgress(gomock.Any(), infraEnvId, hostId, models.HostStageWaitingForBootkube, "").Return(nil).Times(1)
 			mockops.EXPECT().ExecPrivilegeCommand(gomock.Any(), "stat", "/opt/openshift/.bootkube.done").Return("OK", nil).Times(1)
 		}
 		bootkubeStatusSuccess := func() {
@@ -230,7 +233,6 @@ var _ = Describe("installer HostRoleMaster role", func() {
 			mockops.EXPECT().ExtractFromIgnition(filepath.Join(InstallDir, bootstrapIgn), dockerConfigFile).Return(nil).Times(1)
 		}
 		generateSshKeyPairSuccess := func() {
-			mkdirSuccess(sshDir)
 			mockops.EXPECT().ExecPrivilegeCommand(gomock.Any(), "ssh-keygen", "-q", "-f", sshKeyPath, "-N", "").Return("OK", nil).Times(1)
 		}
 		createOpenshiftSshManifestSuccess := func() {
@@ -239,6 +241,7 @@ var _ = Describe("installer HostRoleMaster role", func() {
 
 		bootstrapSetup := func() {
 			cleanInstallDevice()
+			mkdirSuccess(sshDir)
 			mkdirSuccess(InstallDir)
 			downloadFileSuccess(bootstrapIgn)
 			extractSecretFromIgnitionSuccess()
@@ -276,7 +279,7 @@ var _ = Describe("installer HostRoleMaster role", func() {
 					resolvConfSuccess()
 					waitForControllerSuccessfully(conf.ClusterID)
 					//HostRoleMaster flow:
-					downloadHostIgnitionSuccess(hostId, "master-host-id.ign")
+					downloadHostIgnitionSuccess(infraEnvId, hostId, "master-host-id.ign")
 					writeToDiskSuccess(gomock.Any())
 					reportLogProgressSuccess()
 					setBootOrderSuccess(gomock.Any())
@@ -309,7 +312,7 @@ var _ = Describe("installer HostRoleMaster role", func() {
 					resolvConfSuccess()
 					waitForControllerSuccessfully(conf.ClusterID)
 					//HostRoleMaster flow:
-					downloadHostIgnitionSuccess(hostId, "master-host-id.ign")
+					downloadHostIgnitionSuccess(infraEnvId, hostId, "master-host-id.ign")
 					writeToDiskSuccess(gomock.Any())
 					setBootOrderSuccess(gomock.Any())
 					uploadLogsSuccess(true)
@@ -327,6 +330,7 @@ var _ = Describe("installer HostRoleMaster role", func() {
 			})
 			cleanInstallDevice()
 			mkdirSuccess(InstallDir)
+			mkdirSuccess(sshDir)
 			downloadFileSuccess(bootstrapIgn)
 			extractSecretFromIgnitionSuccess()
 			extractIgnitionToFS("Success", nil)
@@ -334,7 +338,7 @@ var _ = Describe("installer HostRoleMaster role", func() {
 			err := fmt.Errorf("generate SSH keys failed")
 			mockops.EXPECT().CreateOpenshiftSshManifest(assistedInstallerSshManifest, sshManifestTmpl, sshPubKeyPath).Return(err).Times(1)
 			//HostRoleMaster flow:
-			downloadHostIgnitionSuccess(hostId, "master-host-id.ign")
+			downloadHostIgnitionSuccess(infraEnvId, hostId, "master-host-id.ign")
 			writeToDiskSuccess(gomock.Any())
 			setBootOrderSuccess(gomock.Any())
 			ret := installerObj.InstallNode()
@@ -359,7 +363,7 @@ var _ = Describe("installer HostRoleMaster role", func() {
 			resolvConfSuccess()
 			waitForControllerSuccessfully(conf.ClusterID)
 			//HostRoleMaster flow:
-			downloadHostIgnitionSuccess(hostId, "master-host-id.ign")
+			downloadHostIgnitionSuccess(infraEnvId, hostId, "master-host-id.ign")
 			writeToDiskSuccess(gomock.Any())
 			setBootOrderSuccess(gomock.Any())
 			uploadLogsSuccess(true)
@@ -375,8 +379,9 @@ var _ = Describe("installer HostRoleMaster role", func() {
 			})
 			cleanInstallDevice()
 			mkdirSuccess(InstallDir)
+			mkdirSuccess(sshDir)
 			downloadFileSuccess(bootstrapIgn)
-			downloadHostIgnitionSuccess(hostId, "master-host-id.ign")
+			downloadHostIgnitionSuccess(infraEnvId, hostId, "master-host-id.ign")
 			writeToDiskSuccess(gomock.Any())
 			setBootOrderSuccess(gomock.Any())
 			extractSecretFromIgnitionSuccess()
@@ -397,17 +402,18 @@ var _ = Describe("installer HostRoleMaster role", func() {
 			err := fmt.Errorf("Failed to restart NetworkManager")
 			restartNetworkManager(err)
 			//HostRoleMaster flow:
-			downloadHostIgnitionSuccess(hostId, "master-host-id.ign")
+			downloadHostIgnitionSuccess(infraEnvId, hostId, "master-host-id.ign")
 			writeToDiskSuccess(gomock.Any())
 			setBootOrderSuccess(gomock.Any())
 			ret := installerObj.InstallNode()
 			Expect(ret).Should(Equal(err))
 		})
 	})
-	Context("Bootstrap role waiting for controller", func() {
+	Context("Bootstrap role waiting for control plane", func() {
 
 		conf := config.Config{Role: string(models.HostRoleBootstrap),
 			ClusterID:        "cluster-id",
+			InfraEnvID:       "infra-env-id",
 			HostID:           "host-id",
 			Device:           "/dev/vda",
 			URL:              "https://assisted-service.com:80",
@@ -417,35 +423,34 @@ var _ = Describe("installer HostRoleMaster role", func() {
 		BeforeEach(func() {
 			installerObj = NewAssistedInstaller(l, conf, mockops, mockbmclient, k8sBuilder, mockIgnition)
 		})
+		It("waitForControlPlane reload resolv.conf failed", func() {
+			mockops.EXPECT().ReloadHostFile("/etc/resolv.conf").Return(fmt.Errorf("failed to load file")).Times(1)
 
-		It("waitForController reload resolv.conf failed", func() {
-			mockbmclient.EXPECT().UpdateHostInstallProgress(gomock.Any(), hostId, models.HostStageWaitingForController, "waiting for controller pod ready event").Return(nil).Times(1)
-			mockops.EXPECT().ReloadHostFile("/etc/resolv.conf").Return(fmt.Errorf("dummy")).Times(1)
-
-			err := installerObj.waitForController()
+			err := installerObj.waitForControlPlane(context.Background())
 			Expect(err).To(HaveOccurred())
 		})
+
 		It("waitForController reload get pods fails then succeeds", func() {
-			resolvConfSuccess()
 			reportLogProgressSuccess()
-			mockbmclient.EXPECT().UpdateHostInstallProgress(gomock.Any(), hostId, models.HostStageWaitingForController, "waiting for controller pod ready event").Return(nil).Times(1)
+			mockbmclient.EXPECT().UpdateHostInstallProgress(gomock.Any(), infraEnvId, hostId, models.HostStageWaitingForController, "waiting for controller pod ready event").Return(nil).Times(1)
 			mockk8sclient.EXPECT().GetPods("assisted-installer", gomock.Any(), "").Return(nil, fmt.Errorf("dummy")).Times(1)
 			mockk8sclient.EXPECT().ListEvents(assistedControllerNamespace).Return(&events, nil).Times(1)
-			err := installerObj.waitForController()
+			err := installerObj.waitForController(mockk8sclient)
 			Expect(err).NotTo(HaveOccurred())
 		})
 		It("Configuring state", func() {
 			var logs string
 			logsInBytes, _ := ioutil.ReadFile("../../test_files/mcs_logs.txt")
 			logs = string(logsInBytes)
+			infraEnvID := strfmt.UUID("eb82821f-bf21-4614-9a3b-ecb07929f250")
 			node0Id := strfmt.UUID("eb82821f-bf21-4614-9a3b-ecb07929f238")
 			node1Id := strfmt.UUID("eb82821f-bf21-4614-9a3b-ecb07929f239")
 			node2Id := strfmt.UUID("eb82821f-bf21-4614-9a3b-ecb07929f240")
 
-			testInventoryIdsIps := map[string]inventory_client.HostData{"node0": {Host: &models.Host{ID: &node0Id, Progress: &models.HostProgressInfo{CurrentStage: models.HostStageRebooting}},
+			testInventoryIdsIps := map[string]inventory_client.HostData{"node0": {Host: &models.Host{InfraEnvID: infraEnvID, ID: &node0Id, Progress: &models.HostProgressInfo{CurrentStage: models.HostStageRebooting}},
 				IPs: []string{"192.168.126.10", "192.168.11.122", "fe80::5054:ff:fe9a:4738"}},
-				"node1": {Host: &models.Host{ID: &node1Id, Progress: &models.HostProgressInfo{CurrentStage: models.HostStageRebooting}}, IPs: []string{"192.168.126.11", "192.168.11.123", "fe80::5054:ff:fe9a:4739"}},
-				"node2": {Host: &models.Host{ID: &node2Id, Progress: &models.HostProgressInfo{CurrentStage: models.HostStageRebooting}}, IPs: []string{"192.168.126.12", "192.168.11.124", "fe80::5054:ff:fe9a:4740"}}}
+				"node1": {Host: &models.Host{InfraEnvID: infraEnvID, ID: &node1Id, Progress: &models.HostProgressInfo{CurrentStage: models.HostStageRebooting}}, IPs: []string{"192.168.126.11", "192.168.11.123", "fe80::5054:ff:fe9a:4739"}},
+				"node2": {Host: &models.Host{InfraEnvID: infraEnvID, ID: &node2Id, Progress: &models.HostProgressInfo{CurrentStage: models.HostStageRebooting}}, IPs: []string{"192.168.126.12", "192.168.11.124", "fe80::5054:ff:fe9a:4740"}}}
 			mockbmclient.EXPECT().GetEnabledHostsNamesHosts(gomock.Any(), gomock.Any()).Return(nil, fmt.Errorf("dummy")).Times(1)
 			mockbmclient.EXPECT().GetEnabledHostsNamesHosts(gomock.Any(), gomock.Any()).Return(testInventoryIdsIps, nil).Times(1)
 			mockops.EXPECT().GetMCSLogs().Return("", fmt.Errorf("dummy")).Times(1)
@@ -453,9 +458,9 @@ var _ = Describe("installer HostRoleMaster role", func() {
 			mockops.EXPECT().GetMCSLogs().Return("dummy logs", nil).Times(1)
 			mockops.EXPECT().GetMCSLogs().Return(logs, nil).AnyTimes()
 
-			mockbmclient.EXPECT().UpdateHostInstallProgress(gomock.Any(), gomock.Any(), models.HostStageConfiguring, gomock.Any()).Return(fmt.Errorf("dummy")).Times(1)
-			mockbmclient.EXPECT().UpdateHostInstallProgress(gomock.Any(), "eb82821f-bf21-4614-9a3b-ecb07929f240", models.HostStageConfiguring, gomock.Any()).Return(nil).Times(1)
-			mockbmclient.EXPECT().UpdateHostInstallProgress(gomock.Any(), "eb82821f-bf21-4614-9a3b-ecb07929f239", models.HostStageConfiguring, gomock.Any()).Return(nil).Times(1)
+			mockbmclient.EXPECT().UpdateHostInstallProgress(gomock.Any(), gomock.Any(), gomock.Any(), models.HostStageConfiguring, gomock.Any()).Return(fmt.Errorf("dummy")).Times(1)
+			mockbmclient.EXPECT().UpdateHostInstallProgress(gomock.Any(), "eb82821f-bf21-4614-9a3b-ecb07929f250", "eb82821f-bf21-4614-9a3b-ecb07929f240", models.HostStageConfiguring, gomock.Any()).Return(nil).Times(1)
+			mockbmclient.EXPECT().UpdateHostInstallProgress(gomock.Any(), "eb82821f-bf21-4614-9a3b-ecb07929f250", "eb82821f-bf21-4614-9a3b-ecb07929f239", models.HostStageConfiguring, gomock.Any()).Return(nil).Times(1)
 
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
@@ -466,12 +471,13 @@ var _ = Describe("installer HostRoleMaster role", func() {
 			var logs string
 			logsInBytes, _ := ioutil.ReadFile("../../test_files/mcs_logs.txt")
 			logs = string(logsInBytes)
+			infraEnvId := strfmt.UUID("eb82821f-bf21-4614-9a3b-ecb07929f250")
 			node1Id := strfmt.UUID("eb82821f-bf21-4614-9a3b-ecb07929f239")
 			node2Id := strfmt.UUID("eb82821f-bf21-4614-9a3b-ecb07929f240")
 
 			testInventoryIdsIps := map[string]inventory_client.HostData{
-				"node1": {Host: &models.Host{ID: &node1Id, Progress: &models.HostProgressInfo{CurrentStage: models.HostStageRebooting}}, IPs: []string{"192.168.126.11", "192.168.11.123", "fe80::5054:ff:fe9a:4739"}},
-				"node2": {Host: &models.Host{ID: &node2Id, Progress: &models.HostProgressInfo{CurrentStage: models.HostStageRebooting}}, IPs: []string{"192.168.126.12", "192.168.11.124", "fe80::5054:ff:fe9a:4740"}}}
+				"node1": {Host: &models.Host{InfraEnvID: infraEnvId, ID: &node1Id, Progress: &models.HostProgressInfo{CurrentStage: models.HostStageRebooting}}, IPs: []string{"192.168.126.11", "192.168.11.123", "fe80::5054:ff:fe9a:4739"}},
+				"node2": {Host: &models.Host{InfraEnvID: infraEnvId, ID: &node2Id, Progress: &models.HostProgressInfo{CurrentStage: models.HostStageRebooting}}, IPs: []string{"192.168.126.12", "192.168.11.124", "fe80::5054:ff:fe9a:4740"}}}
 			mockbmclient.EXPECT().GetEnabledHostsNamesHosts(gomock.Any(), gomock.Any()).Return(nil, fmt.Errorf("dummy")).Times(1)
 			mockbmclient.EXPECT().GetEnabledHostsNamesHosts(gomock.Any(), gomock.Any()).Return(testInventoryIdsIps, nil).Times(1)
 			mockops.EXPECT().GetMCSLogs().Return("", fmt.Errorf("dummy")).Times(1)
@@ -479,9 +485,9 @@ var _ = Describe("installer HostRoleMaster role", func() {
 			mockops.EXPECT().GetMCSLogs().Return("dummy logs", nil).Times(1)
 			mockops.EXPECT().GetMCSLogs().Return(logs, nil).AnyTimes()
 
-			mockbmclient.EXPECT().UpdateHostInstallProgress(gomock.Any(), gomock.Any(), models.HostStageConfiguring, gomock.Any()).Return(fmt.Errorf("dummy")).Times(1)
-			mockbmclient.EXPECT().UpdateHostInstallProgress(gomock.Any(), "eb82821f-bf21-4614-9a3b-ecb07929f240", models.HostStageConfiguring, gomock.Any()).Return(nil).Times(1)
-			mockbmclient.EXPECT().UpdateHostInstallProgress(gomock.Any(), "eb82821f-bf21-4614-9a3b-ecb07929f239", models.HostStageConfiguring, gomock.Any()).Return(nil).Times(1)
+			mockbmclient.EXPECT().UpdateHostInstallProgress(gomock.Any(), gomock.Any(), gomock.Any(), models.HostStageConfiguring, gomock.Any()).Return(fmt.Errorf("dummy")).Times(1)
+			mockbmclient.EXPECT().UpdateHostInstallProgress(gomock.Any(), "eb82821f-bf21-4614-9a3b-ecb07929f250", "eb82821f-bf21-4614-9a3b-ecb07929f240", models.HostStageConfiguring, gomock.Any()).Return(nil).Times(1)
+			mockbmclient.EXPECT().UpdateHostInstallProgress(gomock.Any(), "eb82821f-bf21-4614-9a3b-ecb07929f250", "eb82821f-bf21-4614-9a3b-ecb07929f239", models.HostStageConfiguring, gomock.Any()).Return(nil).Times(1)
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			installerObj.updateConfiguringStatus(ctx)
@@ -491,6 +497,7 @@ var _ = Describe("installer HostRoleMaster role", func() {
 		installerArgs := []string{"-n", "--append-karg", "nameserver=8.8.8.8"}
 		conf := config.Config{Role: string(models.HostRoleMaster),
 			ClusterID:        "cluster-id",
+			InfraEnvID:       "infra-env-id",
 			HostID:           "host-id",
 			Device:           "/dev/vda",
 			URL:              "https://assisted-service.com:80",
@@ -510,7 +517,7 @@ var _ = Describe("installer HostRoleMaster role", func() {
 			})
 			cleanInstallDevice()
 			mkdirSuccess(InstallDir)
-			downloadHostIgnitionSuccess(hostId, "master-host-id.ign")
+			downloadHostIgnitionSuccess(infraEnvId, hostId, "master-host-id.ign")
 			writeToDiskSuccess(installerArgs)
 			setBootOrderSuccess(gomock.Any())
 			uploadLogsSuccess(false)
@@ -559,7 +566,7 @@ var _ = Describe("installer HostRoleMaster role", func() {
 			cleanInstallDevice()
 			mkdirSuccess(InstallDir)
 			err := fmt.Errorf("failed to fetch file")
-			mockbmclient.EXPECT().DownloadHostIgnition(gomock.Any(), hostId, filepath.Join(InstallDir, "master-host-id.ign")).Return(err).Times(1)
+			mockbmclient.EXPECT().DownloadHostIgnition(gomock.Any(), infraEnvId, hostId, filepath.Join(InstallDir, "master-host-id.ign")).Return(err).Times(1)
 			ret := installerObj.InstallNode()
 			Expect(ret).Should(Equal(err))
 		})
@@ -570,7 +577,7 @@ var _ = Describe("installer HostRoleMaster role", func() {
 			})
 			cleanInstallDevice()
 			mkdirSuccess(InstallDir)
-			downloadHostIgnitionSuccess(hostId, "master-host-id.ign")
+			downloadHostIgnitionSuccess(infraEnvId, hostId, "master-host-id.ign")
 			err := fmt.Errorf("failed to write image to disk")
 			mockops.EXPECT().WriteImageToDisk(filepath.Join(InstallDir, "master-host-id.ign"), device, mockbmclient, installerArgs).Return(err).Times(3)
 			ret := installerObj.InstallNode()
@@ -584,7 +591,7 @@ var _ = Describe("installer HostRoleMaster role", func() {
 			})
 			cleanInstallDevice()
 			mkdirSuccess(InstallDir)
-			downloadHostIgnitionSuccess(hostId, "master-host-id.ign")
+			downloadHostIgnitionSuccess(infraEnvId, hostId, "master-host-id.ign")
 			uploadLogsSuccess(false)
 			reportLogProgressSuccess()
 			writeToDiskSuccess(installerArgs)
@@ -598,6 +605,7 @@ var _ = Describe("installer HostRoleMaster role", func() {
 	Context("Worker role", func() {
 		conf := config.Config{Role: string(models.HostRoleWorker),
 			ClusterID:        "cluster-id",
+			InfraEnvID:       "infra-env-id",
 			HostID:           "host-id",
 			Device:           "/dev/vda",
 			URL:              "https://assisted-service.com:80",
@@ -611,11 +619,29 @@ var _ = Describe("installer HostRoleMaster role", func() {
 			updateProgressSuccess([][]string{{string(models.HostStageStartingInstallation), conf.Role},
 				{string(models.HostStageInstalling), conf.Role},
 				{string(models.HostStageWritingImageToDisk)},
+				{string(models.HostStageWaitingForControlPlane)},
 				{string(models.HostStageRebooting)},
 			})
+			cluster := models.Cluster{
+				Hosts: []*models.Host{
+					{
+						Role: models.HostRoleMaster,
+						Progress: &models.HostProgressInfo{
+							CurrentStage: models.HostStageDone,
+						},
+					},
+					{
+						Role: models.HostRoleMaster,
+						Progress: &models.HostProgressInfo{
+							CurrentStage: models.HostStageDone,
+						},
+					},
+				},
+			}
+			mockbmclient.EXPECT().GetCluster(gomock.Any()).Return(&cluster, nil).Times(1)
 			cleanInstallDevice()
 			mkdirSuccess(InstallDir)
-			downloadHostIgnitionSuccess(hostId, "worker-host-id.ign")
+			downloadHostIgnitionSuccess(infraEnvId, hostId, "worker-host-id.ign")
 			mockops.EXPECT().WriteImageToDisk(filepath.Join(InstallDir, "worker-host-id.ign"), device, mockbmclient, nil).Return(nil).Times(1)
 			setBootOrderSuccess(gomock.Any())
 			// failure must do nothing
@@ -630,6 +656,7 @@ var _ = Describe("installer HostRoleMaster role", func() {
 
 		conf := config.Config{Role: string(models.HostRoleMaster),
 			ClusterID:            "cluster-id",
+			InfraEnvID:           "infra-env-id",
 			HostID:               "host-id",
 			Device:               "/dev/vda",
 			URL:                  "https://assisted-service.com:80",
@@ -676,7 +703,7 @@ var _ = Describe("installer HostRoleMaster role", func() {
 			mockops.EXPECT().PrepareController().Return(nil).Times(1)
 		}
 		waitForBootkubeSuccess := func() {
-			mockbmclient.EXPECT().UpdateHostInstallProgress(gomock.Any(), hostId, models.HostStageWaitingForBootkube, "").Return(nil).Times(1)
+			mockbmclient.EXPECT().UpdateHostInstallProgress(gomock.Any(), infraEnvId, hostId, models.HostStageWaitingForBootkube, "").Return(nil).Times(1)
 			mockops.EXPECT().ExecPrivilegeCommand(gomock.Any(), "stat", "/opt/openshift/.bootkube.done").Return("OK", nil).Times(1)
 		}
 		bootkubeStatusSuccess := func() {
@@ -688,6 +715,7 @@ var _ = Describe("installer HostRoleMaster role", func() {
 		singleNodeBootstrapSetup := func() {
 			cleanInstallDevice()
 			mkdirSuccess(InstallDir)
+			mkdirSuccess(sshDir)
 			downloadFileSuccess(bootstrapIgn)
 			extractSecretFromIgnitionSuccess()
 			extractIgnitionToFS("Success", nil)
@@ -714,7 +742,7 @@ var _ = Describe("installer HostRoleMaster role", func() {
 			//HostRoleMaster flow:
 			verifySingleNodeMasterIgnitionSuccess()
 			singleNodeMergeIgnitionSuccess()
-			downloadHostIgnitionSuccess(hostId, "master-host-id.ign")
+			downloadHostIgnitionSuccess(infraEnvId, hostId, "master-host-id.ign")
 			mockops.EXPECT().WriteImageToDisk(singleNodeMasterIgnitionPath, device, mockbmclient, nil).Return(nil).Times(1)
 			setBootOrderSuccess(gomock.Any())
 			uploadLogsSuccess(true)

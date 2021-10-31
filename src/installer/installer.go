@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
-	"strings"
 	"time"
 
+	"github.com/go-openapi/swag"
 	"github.com/google/uuid"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
@@ -26,7 +26,6 @@ import (
 
 const (
 	InstallDir                   = "/opt/install-dir"
-	KubeconfigPathLoopBack       = "/opt/openshift/auth/kubeconfig-loopback"
 	KubeconfigPath               = "/opt/openshift/auth/kubeconfig"
 	minMasterNodes               = 2
 	dockerConfigFile             = "/root/.docker/config.json"
@@ -134,9 +133,15 @@ func (i *installer) InstallNode() error {
 		}
 		i.log.Info("Setting bootstrap node new role to master")
 
+	} else if i.Config.Role == string(models.HostRoleWorker) {
+		// Wait for 2 masters to be ready before rebooting
+		if err = i.workerWaitFor2ReadyMasters(ctx); err != nil {
+			return err
+		}
 	}
 	//upload host logs and report log status before reboot
-	i.inventoryClient.HostLogProgressReport(ctx, i.Config.ClusterID, i.Config.HostID, models.LogsStateRequested)
+	i.log.Infof("Uploading logs and reporting status before rebooting the node %s for cluster %s", i.Config.HostID, i.Config.ClusterID)
+	i.inventoryClient.HostLogProgressReport(ctx, i.Config.InfraEnvID, i.Config.HostID, models.LogsStateRequested)
 	_, err = i.ops.UploadInstallationLogs(isBootstrap || i.HighAvailabilityMode == models.ClusterHighAvailabilityModeNone)
 	if err != nil {
 		i.log.Errorf("upload installation logs %s", err)
@@ -195,6 +200,12 @@ func (i *installer) writeImageToDisk(ignitionPath string) error {
 
 func (i *installer) startBootstrap() error {
 	i.log.Infof("Running bootstrap")
+	// This is required for the log collection command to work since it will try to mount this directory
+	// This directory is also required by `generateSshKeyPair` as it will place the key there
+	if err := i.ops.Mkdir(sshDir); err != nil {
+		i.log.WithError(err).Error("Failed to create SSH dir")
+		return err
+	}
 	ignitionFileName := "bootstrap.ign"
 	ignitionPath, err := i.getFileFromService(ignitionFileName)
 	if err != nil {
@@ -289,10 +300,6 @@ func (i *installer) extractIgnitionToFS(ignitionPath string) (err error) {
 
 func (i *installer) generateSshKeyPair() error {
 	i.log.Info("Generating new SSH key pair")
-	if err := i.ops.Mkdir(sshDir); err != nil {
-		i.log.WithError(err).Error("Failed to create SSH dir")
-		return err
-	}
 	if _, err := i.ops.ExecPrivilegeCommand(utils.NewLogWriter(i.log), "ssh-keygen", "-q", "-f", sshKeyPath, "-N", ""); err != nil {
 		i.log.WithError(err).Error("Failed to generate SSH key pair")
 		return err
@@ -319,7 +326,7 @@ func (i *installer) downloadHostIgnition() (string, error) {
 	log.Infof("Getting %s file", filename)
 
 	dest := filepath.Join(InstallDir, filename)
-	err := i.inventoryClient.DownloadHostIgnition(ctx, i.Config.HostID, dest)
+	err := i.inventoryClient.DownloadHostIgnition(ctx, i.Config.InfraEnvID, i.Config.HostID, dest)
 	if err != nil {
 		log.Errorf("Failed to fetch file (%s) from server. err: %s", filename, err)
 	}
@@ -337,12 +344,18 @@ func (i *installer) waitForNetworkType(kc k8s_client.K8SClient) error {
 }
 
 func (i *installer) waitForControlPlane(ctx context.Context) error {
-	kc, err := i.kcBuilder(KubeconfigPathLoopBack, i.log)
+	err := i.ops.ReloadHostFile("/etc/resolv.conf")
+	if err != nil {
+		i.log.WithError(err).Error("Failed to reload resolv.conf")
+		return err
+	}
+	kc, err := i.kcBuilder(KubeconfigPath, i.log)
 	if err != nil {
 		i.log.Error(err)
 		return err
 	}
 	i.UpdateHostInstallProgress(models.HostStageWaitingForControlPlane, "")
+
 	if err = i.waitForMinMasterNodes(ctx, kc); err != nil {
 		return err
 	}
@@ -364,12 +377,38 @@ func (i *installer) waitForControlPlane(ctx context.Context) error {
 	i.waitForBootkube(ctx)
 
 	// waiting for controller pod to be running
-	if err := i.waitForController(); err != nil {
+	if err := i.waitForController(kc); err != nil {
 		i.log.Error(err)
 		return err
 	}
 
 	return nil
+}
+
+func numDoneMasters(cluster *models.Cluster) int {
+	numDoneMasters := 0
+	for _, h := range cluster.Hosts {
+		if h.Role == models.HostRoleMaster && h.Progress.CurrentStage == models.HostStageDone {
+			numDoneMasters++
+		}
+	}
+	return numDoneMasters
+}
+
+func (i *installer) workerWaitFor2ReadyMasters(ctx context.Context) error {
+	i.log.Info("Waiting for 2 ready masters")
+	i.UpdateHostInstallProgress(models.HostStageWaitingForControlPlane, "")
+	for {
+		cluster, err := i.inventoryClient.GetCluster(ctx)
+		if err != nil {
+			i.log.WithError(err).Errorf("Getting cluster %s", i.ClusterID)
+			return err
+		}
+		if swag.StringValue(cluster.Kind) == models.ClusterKindAddHostsCluster || numDoneMasters(cluster) >= minMasterNodes {
+			return nil
+		}
+		time.Sleep(generalWaitInterval)
+	}
 }
 
 func (i *installer) shouldControlPlaneReplicasPatchApplied(kc k8s_client.K8SClient) (bool, error) {
@@ -441,7 +480,7 @@ func (i *installer) UpdateHostInstallProgress(newStage models.HostStage, info st
 	log := utils.RequestIDLogger(ctx, i.log)
 	log.Infof("Updating node installation stage: %s - %s", newStage, info)
 	if i.HostID != "" {
-		if err := i.inventoryClient.UpdateHostInstallProgress(ctx, i.HostID, newStage, info); err != nil {
+		if err := i.inventoryClient.UpdateHostInstallProgress(ctx, i.Config.InfraEnvID, i.Config.HostID, newStage, info); err != nil {
 			log.Errorf("Failed to update node installation stage, %s", err)
 		}
 	}
@@ -469,20 +508,9 @@ func (i *installer) waitForBootkube(ctx context.Context) {
 	}
 }
 
-func (i *installer) waitForController() error {
+func (i *installer) waitForController(kc k8s_client.K8SClient) error {
 	i.log.Infof("Waiting for controller to be ready")
 	i.UpdateHostInstallProgress(models.HostStageWaitingForController, "waiting for controller pod ready event")
-	err := i.ops.ReloadHostFile("/etc/resolv.conf")
-	if err != nil {
-		i.log.WithError(err).Error("Failed to reload resolv.conf")
-		return err
-	}
-
-	kc, err := i.kcBuilder(KubeconfigPath, i.log)
-	if err != nil {
-		i.log.WithError(err).Errorf("Failed to create kc client from %s", KubeconfigPath)
-		return err
-	}
 
 	events := map[string]string{}
 	tickerUploadLogs := time.NewTicker(5 * time.Minute)
@@ -605,6 +633,8 @@ func (i *installer) getInventoryHostsMap(hostsMap map[string]inventory_client.Ho
 
 func (i *installer) updateReadyMasters(nodes *v1.NodeList, readyMasters *[]string, inventoryHostsMap map[string]inventory_client.HostData) error {
 	nodeNameAndCondition := map[string][]v1.NodeCondition{}
+	knownIpAddresses := common.BuildHostsMapIPAddressBased(inventoryHostsMap)
+
 	for _, node := range nodes.Items {
 		nodeNameAndCondition[node.Name] = node.Status.Conditions
 		if common.IsK8sNodeIsReady(node) && !funk.ContainsString(*readyMasters, node.Name) {
@@ -612,12 +642,13 @@ func (i *installer) updateReadyMasters(nodes *v1.NodeList, readyMasters *[]strin
 			log := utils.RequestIDLogger(ctx, i.log)
 			log.Infof("Found a new ready master node %s with id %s", node.Name, node.Status.NodeInfo.SystemUUID)
 			*readyMasters = append(*readyMasters, node.Name)
-			host, ok := inventoryHostsMap[strings.ToLower(node.Name)]
+
+			host, ok := common.HostMatchByNameOrIPAddress(node, inventoryHostsMap, knownIpAddresses)
 			if !ok {
 				return fmt.Errorf("Node %s is not in inventory hosts", node.Name)
 			}
 			ctx = utils.GenerateRequestContext()
-			if err := i.inventoryClient.UpdateHostInstallProgress(ctx, host.Host.ID.String(), models.HostStageJoined, ""); err != nil {
+			if err := i.inventoryClient.UpdateHostInstallProgress(ctx, host.Host.InfraEnvID.String(), host.Host.ID.String(), models.HostStageJoined, ""); err != nil {
 				utils.RequestIDLogger(ctx, i.log).Errorf("Failed to update node installation status, %s", err)
 			}
 		}
