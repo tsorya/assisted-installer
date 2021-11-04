@@ -456,7 +456,7 @@ func (c controller) postInstallConfigs(ctx context.Context) error {
 }
 
 func (c controller) waitForOLMOperators(ctx context.Context) error {
-	var operators []models.MonitoredOperator
+	var operators models.MonitoredOperatorsList
 	var err error
 
 	// Get the monitored operators:
@@ -504,10 +504,10 @@ func (c controller) waitForOLMOperators(ctx context.Context) error {
 	return nil
 }
 
-func (c controller) getReadyOperators(operators []models.MonitoredOperator) ([]string, []models.MonitoredOperator, error) {
+func (c controller) getReadyOperators(operators models.MonitoredOperatorsList) ([]string, models.MonitoredOperatorsList, error) {
 	var readyOperators []string
 	for index := range operators {
-		handler := NewClusterServiceVersionHandler(c.kc, &operators[index], c.Status)
+		handler := NewClusterServiceVersionHandler(c.kc, operators[index], c.Status)
 		if handler.IsInitialized() {
 			readyOperators = append(readyOperators, handler.GetName())
 		}
@@ -516,7 +516,7 @@ func (c controller) getReadyOperators(operators []models.MonitoredOperator) ([]s
 }
 
 func (c controller) waitForCSVBeCreated(arg interface{}) bool {
-	operators := arg.([]models.MonitoredOperator)
+	operators := arg.(models.MonitoredOperatorsList)
 	readyOperators, operators, err := c.getReadyOperators(operators)
 	if err != nil {
 		c.log.WithError(err).Warn("Error while fetch the operators state.")
@@ -562,7 +562,7 @@ func (c controller) applyPostInstallManifests(arg interface{}) bool {
 	}
 
 	// Create the manifests of the opreators, which are properly initialized:
-	readyOperators, _, err := c.getReadyOperators(arg.([]models.MonitoredOperator))
+	readyOperators, _, err := c.getReadyOperators(arg.(models.MonitoredOperatorsList))
 	if err != nil {
 		c.log.WithError(err).Errorf("Failed to fetch operators from assisted-service")
 		return false
@@ -850,7 +850,7 @@ func (c controller) addRouterCAToClusterCA() bool {
 
 }
 
-func (c controller) getMaximumOLMTimeout(operators []models.MonitoredOperator) time.Duration {
+func (c controller) getMaximumOLMTimeout(operators models.MonitoredOperatorsList) time.Duration {
 	timeout := WaitTimeout.Seconds()
 	for _, operator := range operators {
 		timeout = math.Max(float64(operator.TimeoutSeconds), timeout)
@@ -859,8 +859,8 @@ func (c controller) getMaximumOLMTimeout(operators []models.MonitoredOperator) t
 	return time.Duration(timeout * float64(time.Second))
 }
 
-func (c controller) getProgressingOLMOperators() ([]*models.MonitoredOperator, error) {
-	ret := make([]*models.MonitoredOperator, 0)
+func (c controller) getProgressingOLMOperators() (models.MonitoredOperatorsList, error) {
+	var ret models.MonitoredOperatorsList
 	operators, err := c.ic.GetClusterMonitoredOLMOperators(context.TODO(), c.ClusterID)
 	if err != nil {
 		c.log.WithError(err).Warningf("Failed to connect to assisted service")
@@ -868,7 +868,7 @@ func (c controller) getProgressingOLMOperators() ([]*models.MonitoredOperator, e
 	}
 	for index := range operators {
 		if operators[index].Status != models.OperatorStatusAvailable && operators[index].Status != models.OperatorStatusFailed {
-			ret = append(ret, &operators[index])
+			ret = append(ret, operators[index])
 		}
 	}
 	return ret, nil
@@ -913,7 +913,7 @@ func (c controller) waitForCSV(ctx context.Context, waitTimeout time.Duration) e
 		}
 
 		for index := range handlers {
-			if c.isOperatorAvailable(handlers[index]) {
+			if c.isOperatorAvailable(handlers[index], operators) {
 				delete(handlers, index)
 			}
 		}
@@ -933,10 +933,22 @@ func (c controller) waitingForClusterOperators(ctx context.Context) error {
 	ctxWithTimeout, cancel := context.WithTimeout(ctx, CVOMaxTimeout)
 	defer cancel()
 	isClusterVersionAvailable := func(timer *time.Timer) bool {
-		result := c.isOperatorAvailable(NewClusterOperatorHandler(c.kc, consoleOperatorName))
+		operators, err := c.ic.GetMonitoredOperators(context.TODO(), c.ClusterID)
+		if err != nil {
+			c.log.WithError(err).Errorf("Failed to get monitored operators in %s", c.ClusterID)
+			return KeepWaiting
+		}
+
+		if len(operators) == 0 {
+			c.log.Errorf("Got 0 monitored operators in %s", c.ClusterID)
+			return KeepWaiting
+		}
+
+		fmt.Println("AAAAAAAAAAAAAAAAAAAA", len(operators), operators[0])
+		result := c.isOperatorAvailable(NewClusterOperatorHandler(c.kc, consoleOperatorName), operators)
 
 		if c.WaitForClusterVersion {
-			result = c.isOperatorAvailable(NewClusterVersionHandler(c.kc, timer))
+			result = c.isOperatorAvailable(NewClusterVersionHandler(c.kc, timer), operators)
 		}
 
 		return result

@@ -137,6 +137,21 @@ func (mr *MockInventoryClientMockRecorder) GetCluster(ctx interface{}) *gomock.C
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetCluster", reflect.TypeOf((*MockInventoryClient)(nil).GetCluster), ctx)
 }
 
+// GetMonitoredOperators mocks base method
+func (m *MockInventoryClient) GetMonitoredOperators(ctx context.Context, clusterId string) (models.MonitoredOperatorsList, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetMonitoredOperators", ctx, clusterId)
+	ret0, _ := ret[0].(models.MonitoredOperatorsList)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetMonitoredOperators indicates an expected call of GetMonitoredOperators
+func (mr *MockInventoryClientMockRecorder) GetMonitoredOperators(ctx, clusterId interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetMonitoredOperators", reflect.TypeOf((*MockInventoryClient)(nil).GetMonitoredOperators), ctx, clusterId)
+}
+
 // GetClusterMonitoredOperator mocks base method
 func (m *MockInventoryClient) GetClusterMonitoredOperator(ctx context.Context, clusterId, operatorName string) (*models.MonitoredOperator, error) {
 	m.ctrl.T.Helper()
@@ -153,10 +168,10 @@ func (mr *MockInventoryClientMockRecorder) GetClusterMonitoredOperator(ctx, clus
 }
 
 // GetClusterMonitoredOLMOperators mocks base method
-func (m *MockInventoryClient) GetClusterMonitoredOLMOperators(ctx context.Context, clusterId string) ([]models.MonitoredOperator, error) {
+func (m *MockInventoryClient) GetClusterMonitoredOLMOperators(ctx context.Context, clusterId string) (models.MonitoredOperatorsList, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetClusterMonitoredOLMOperators", ctx, clusterId)
-	ret0, _ := ret[0].([]models.MonitoredOperator)
+	ret0, _ := ret[0].(models.MonitoredOperatorsList)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }

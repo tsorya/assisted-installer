@@ -21,7 +21,6 @@ import (
 	"github.com/thoas/go-funk"
 
 	"github.com/PuerkitoBio/rehttp"
-	ttlCache "github.com/ReneKroon/ttlcache/v2"
 	"github.com/go-openapi/strfmt"
 	"github.com/openshift/assisted-installer/src/utils"
 	"github.com/openshift/assisted-service/client"
@@ -50,8 +49,9 @@ type InventoryClient interface {
 	GetEnabledHostsNamesHosts(ctx context.Context, log logrus.FieldLogger) (map[string]HostData, error)
 	UploadIngressCa(ctx context.Context, ingressCA string, clusterId string) error
 	GetCluster(ctx context.Context) (*models.Cluster, error)
+	GetMonitoredOperators(ctx context.Context, clusterId string) (models.MonitoredOperatorsList, error)
 	GetClusterMonitoredOperator(ctx context.Context, clusterId, operatorName string) (*models.MonitoredOperator, error)
-	GetClusterMonitoredOLMOperators(ctx context.Context, clusterId string) ([]models.MonitoredOperator, error)
+	GetClusterMonitoredOLMOperators(ctx context.Context, clusterId string) (models.MonitoredOperatorsList, error)
 	CompleteInstallation(ctx context.Context, clusterId string, isSuccess bool, errorInfo string) error
 	GetHosts(ctx context.Context, log logrus.FieldLogger, skippedStatuses []string) (map[string]HostData, error)
 	UploadLogs(ctx context.Context, clusterId string, logsType models.LogsType, upfile io.Reader) error
@@ -64,7 +64,6 @@ type inventoryClient struct {
 	ai        *client.AssistedInstall
 	clusterId strfmt.UUID
 	logger    *logrus.Logger
-	cache     ttlCache.SimpleCache
 }
 
 type HostData struct {
@@ -143,10 +142,8 @@ func CreateInventoryClientWithDelay(clusterId string, inventoryURL string, pullS
 
 	clientConfig.AuthInfo = auth.AgentAuthHeaderWriter(pullSecret)
 	assistedInstallClient := client.New(clientConfig)
-	cache := ttlCache.NewCache()
-	cache.SetTTL(30 * time.Second)
 
-	return &inventoryClient{assistedInstallClient, strfmt.UUID(clusterId), logger, cache}, nil
+	return &inventoryClient{assistedInstallClient, strfmt.UUID(clusterId), logger}, nil
 }
 
 func RetryConnectionRefusedErr() rehttp.RetryFn {
@@ -258,26 +255,18 @@ func (c *inventoryClient) GetCluster(ctx context.Context) (*models.Cluster, erro
 	return cluster.Payload, nil
 }
 
-func (c *inventoryClient) GetMonitoredOperator(ctx context.Context, clusterId string) (models.MonitoredOperatorsList, error) {
-	cacheKey := fmt.Sprintf("GetMonitoredOperator-%s", clusterId)
-	if val, err := c.cache.Get(cacheKey); err != ttlCache.ErrNotFound {
-		fmt.Printf("Got it: %s\n", val)
-		return val.(models.MonitoredOperatorsList), nil
-	}
-
+func (c *inventoryClient) GetMonitoredOperators(ctx context.Context, clusterId string) (models.MonitoredOperatorsList, error) {
 	monitoredOperators, err := c.ai.Operators.V2ListOfClusterOperators(ctx, &operators.V2ListOfClusterOperatorsParams{
 		ClusterID: strfmt.UUID(clusterId),
 	})
 	if err != nil {
 		return nil, aserror.GetAssistedError(err)
 	}
-
-	c.cache.Set(cacheKey, monitoredOperators.Payload)
 	return monitoredOperators.Payload, nil
 }
 
 func (c *inventoryClient) GetClusterMonitoredOperator(ctx context.Context, clusterId, operatorName string) (*models.MonitoredOperator, error) {
-	monitoredOperators, err := c.GetMonitoredOperator(ctx, clusterId)
+	monitoredOperators, err := c.GetMonitoredOperators(ctx, clusterId)
 	if err != nil {
 		return nil, err
 	}
@@ -290,16 +279,16 @@ func (c *inventoryClient) GetClusterMonitoredOperator(ctx context.Context, clust
 	return nil, fmt.Errorf("operator %s not found", operatorName)
 }
 
-func (c *inventoryClient) GetClusterMonitoredOLMOperators(ctx context.Context, clusterId string) ([]models.MonitoredOperator, error) {
-	monitoredOperators, err := c.GetMonitoredOperator(ctx, clusterId)
+func (c *inventoryClient) GetClusterMonitoredOLMOperators(ctx context.Context, clusterId string) (models.MonitoredOperatorsList, error) {
+	monitoredOperators, err := c.GetMonitoredOperators(ctx, clusterId)
 	if err != nil {
 		return nil, err
 	}
 
-	olmOperators := make([]models.MonitoredOperator, 0)
+	var olmOperators models.MonitoredOperatorsList
 	for _, operator := range monitoredOperators {
 		if operator.OperatorType == models.OperatorTypeOlm {
-			olmOperators = append(olmOperators, *operator)
+			olmOperators = append(olmOperators, operator)
 		}
 	}
 

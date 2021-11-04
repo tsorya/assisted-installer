@@ -1,0 +1,21 @@
+apiVersion: batch/v1 # for versions before 1.9.0 use apps/v1beta2
+kind: Job
+metadata:
+  name: assisted-installer-controller-1
+  namespace: assisted-installer
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        app: assisted-installer-controller
+    spec:
+      containers:
+        - name: assisted-installer-controller
+          image: quay.io/itsoiref/assisted-installer-controller:latest1
+          imagePullPolicy: Always
+      restartPolicy: OnFailure
+      hostNetwork: true
+      nodeSelector:
+        node-role.kubernetes.io/master: ""
+      serviceAccountName: assisted-installer-controller

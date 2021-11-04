@@ -2,6 +2,7 @@ package assisted_installer_controller
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/openshift/assisted-installer/src/k8s_client"
@@ -21,13 +22,19 @@ type OperatorHandler interface {
 	IsInitialized() bool
 }
 
-func (c controller) isOperatorAvailable(handler OperatorHandler) bool {
+func (c controller) isOperatorAvailable(handler OperatorHandler, monitoredOperators models.MonitoredOperatorsList) bool {
 	operatorName := handler.GetName()
 	c.log.Infof("Checking <%s> operator availability status", operatorName)
 
-	operatorStatusInService, isAvailable := c.isOperatorAvailableInService(operatorName)
+	operatorStatusInService, isAvailable := c.isOperatorAvailableInService(operatorName, monitoredOperators)
 	if isAvailable {
 		return true
+	}
+	fmt.Println("BBBBBBBBBBBBBBBBB", operatorStatusInService)
+
+	if operatorStatusInService == nil {
+		c.log.Warningf("No operator found in monitoredOperators %v", monitoredOperators[0])
+		return false
 	}
 
 	operatorStatus, operatorMessage, err := handler.GetStatus()
@@ -53,10 +60,21 @@ func (c controller) isOperatorAvailable(handler OperatorHandler) bool {
 	return false
 }
 
-func (c controller) isOperatorAvailableInService(operatorName string) (*models.MonitoredOperator, bool) {
-	operatorStatusInService, err := c.ic.GetClusterMonitoredOperator(utils.GenerateRequestContext(), c.ClusterID, operatorName)
-	if err != nil {
-		c.log.WithError(err).Errorf("Failed to get cluster %s %s operator status", c.ClusterID, operatorName)
+func (c controller) getOperatorFromList(operatorName string, monitoredOperators models.MonitoredOperatorsList) *models.MonitoredOperator {
+	for _, operator := range monitoredOperators {
+		if operator.Name == operatorName {
+			return operator
+		}
+	}
+	return nil
+}
+
+func (c controller) isOperatorAvailableInService(operatorName string, monitoredOperators models.MonitoredOperatorsList) (*models.MonitoredOperator, bool) {
+	operatorStatusInService := c.getOperatorFromList(operatorName, monitoredOperators)
+	fmt.Println(operatorStatusInService)
+	if operatorStatusInService == nil {
+		c.log.Errorf("Failed to get cluster %s %s operator status", c.ClusterID, operatorName)
+		fmt.Println("!!!!!!!!!!!!!!")
 		return nil, false
 	}
 
