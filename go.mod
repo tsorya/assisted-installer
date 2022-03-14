@@ -27,7 +27,7 @@ require (
 	github.com/operator-framework/operator-lifecycle-manager v0.18.0
 	github.com/pkg/errors v0.9.1
 	github.com/sirupsen/logrus v1.8.1
-	github.com/thoas/go-funk v0.8.0
+	github.com/thoas/go-funk v0.9.2
 	github.com/vincent-petithory/dataurl v0.0.0-20191104211930-d1553a71de50
 	golang.org/x/net v0.0.0-20210428140749-89ef3d95e781
 	golang.org/x/sync v0.0.0-20201020160332-67f06af15bc9
