@@ -1210,8 +1210,18 @@ var _ = Describe("installer HostRoleMaster role", func() {
 		It("Validate must-gather logs are retried on error - while cluster error occurred", func() {
 			successUpload()
 			logClusterOperatorsSuccess()
-			mockops.EXPECT().GetMustGatherLogs(gomock.Any(), gomock.Any(), gomock.Any()).Return("", fmt.Errorf("failed"))
-			mockops.EXPECT().GetMustGatherLogs(gomock.Any(), gomock.Any(), gomock.Any()).Return("../../test_files/tartest.tar.gz", nil)
+			mockops.EXPECT().GetMustGatherLogs(gomock.Any(), gomock.Any(), gomock.Any()).Return("", fmt.Errorf("failed")).Times(1)
+			mockops.EXPECT().GetMustGatherLogs(gomock.Any(), gomock.Any(), gomock.Any()).Return("../../test_files/tartest.tar.gz", nil).Times(1)
+			mockbmclient.EXPECT().DownloadClusterCredentials(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(2)
+			assistedController.Status.Error()
+			callUploadLogs(50 * time.Millisecond)
+		})
+
+		It("Validate must-gather logs are sent and then retried on error if logs tar is not empty", func() {
+			successUpload()
+			logClusterOperatorsSuccess()
+			mockops.EXPECT().GetMustGatherLogs(gomock.Any(), gomock.Any(), gomock.Any()).Return("../../test_files/tartest.tar.gz", fmt.Errorf("failed")).Times(1)
+			mockops.EXPECT().GetMustGatherLogs(gomock.Any(), gomock.Any(), gomock.Any()).Return("../../test_files/tartest.tar.gz", nil).Times(1)
 			mockbmclient.EXPECT().DownloadClusterCredentials(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(2)
 			assistedController.Status.Error()
 			callUploadLogs(50 * time.Millisecond)

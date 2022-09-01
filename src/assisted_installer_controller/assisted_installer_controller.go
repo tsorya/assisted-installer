@@ -1170,11 +1170,14 @@ func (c controller) uploadSummaryLogs(podName string, namespace string, sinceSec
 		}
 		c.log.Infof("Uploading oc must-gather logs")
 		images := c.parseMustGatherImages()
-		if tarfile, err := c.collectMustGatherLogs(ctx, images...); err == nil {
+
+		tarfile, err := c.collectMustGatherLogs(ctx, images...)
+		if tarfile != "" {
 			if entry, tarerr := utils.NewTarEntryFromFile(tarfile); tarerr == nil {
 				tarentries = append(tarentries, *entry)
 			}
-		} else {
+		}
+		if err != nil {
 			ok = false
 		}
 	}
@@ -1286,12 +1289,12 @@ func (c controller) collectMustGatherLogs(ctx context.Context, images ...string)
 
 	//collect must gather logs
 	logtar, err := c.ops.GetMustGatherLogs(tempDir, kubeconfigPath, images...)
-	if err != nil {
+	if err != nil && logtar == "" {
 		c.log.Errorf("Failed to collect must-gather logs %v\n", err)
 		return "", err
 	}
 
-	return logtar, nil
+	return logtar, err
 }
 
 // Uploading logs every 5 minutes

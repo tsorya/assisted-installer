@@ -1,6 +1,8 @@
 package ops
 
 import (
+	"fmt"
+	"path"
 	"reflect"
 
 	"errors"
@@ -151,3 +153,35 @@ var _ = Describe("GetVolumeGroupsByDisk", func() {
 		Expect(len(result)).To(Equal(0))
 	})
 })
+
+var _ = Describe("CollectMustGatherLogs", func() {
+
+	var (
+		l        = logrus.New()
+		ctrl     *gomock.Controller
+		execMock *execute.MockExecute
+		conf     *config.Config
+		o        Ops
+		workDir  string
+	)
+
+	BeforeEach(func() {
+		workDir = "../../test_files"
+		ctrl = gomock.NewController(GinkgoT())
+		execMock = execute.NewMockExecute(ctrl)
+		conf = &config.Config{}
+		o = NewOpsWithConfig(conf, l, execMock)
+	})
+
+	It("Return error and tar file in case must-gather command faile but files exists", func() {
+		execMock.EXPECT().ExecCommand(gomock.Any(), gomock.Any(), gomock.Any()).Times(1).Return("test", fmt.Errorf("dummy"))
+		tarFileName := fmt.Sprintf("not-full-%s", MustGatherFileName)
+		command := fmt.Sprintf("cd %s && tar zcf %s %s", workDir, tarFileName, workDir)
+		m := MatcherContainsStringElements{[]string{command}, true}
+		execMock.EXPECT().ExecCommand(gomock.Any(), gomock.Any(), m).Times(1).Return("test", nil)
+		logTar, err := o.GetMustGatherLogs(workDir, "test")
+		Expect(err).To(HaveOccurred())
+		Expect(logTar).Should(Equal(path.Join(workDir, tarFileName)))
+	})
+})
+

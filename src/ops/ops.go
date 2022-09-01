@@ -695,16 +695,19 @@ func (o *ops) CreateOpenshiftSshManifest(filePath, tmpl, sshPubKeyPath string) e
 func (o *ops) GetMustGatherLogs(workDir, kubeconfigPath string, images ...string) (string, error) {
 	//invoke oc adm must-gather command in the working directory
 	var imageOption string = ""
+	tarFileName := MustGatherFileName
 	for _, img := range images {
 		imageOption = imageOption + fmt.Sprintf(" --image=%s", img)
 	}
 
 	command := fmt.Sprintf("cd %s && oc --kubeconfig=%s adm must-gather%s", workDir, kubeconfigPath, imageOption)
-	output, err := o.executor.ExecCommand(o.logWriter, "bash", "-c", command)
-	if err != nil {
-		return "", err
+	output, execError := o.executor.ExecCommand(o.logWriter, "bash", "-c", command)
+	if execError != nil {
+		o.log.WithError(execError).Errorf("Must-gather command failed, will still try to send those files that were gathered")
+		tarFileName = fmt.Sprintf("not-full-%s", MustGatherFileName)
+	} else {
+		o.log.Info(output)
 	}
-	o.log.Info(output)
 
 	//find the directory of logs which is the output of the command
 	//this is a temp directory so we have to find it by its prefix
@@ -714,6 +717,7 @@ func (o *ops) GetMustGatherLogs(workDir, kubeconfigPath string, images ...string
 		return "", err
 	}
 
+	fmt.Println("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAa", files)
 	if len(files) == 0 {
 		lerr := fmt.Errorf("Failed to find must-gather output")
 		o.log.Errorf(lerr.Error())
@@ -721,14 +725,16 @@ func (o *ops) GetMustGatherLogs(workDir, kubeconfigPath string, images ...string
 	}
 	logsDir := filepath.Base(files[0])
 
+	fmt.Println("BBBBBBBBBBBBBBBBBBBBBBBBB")
 	//tar the log directory and return the path to the tarball
-	command = fmt.Sprintf("cd %s && tar zcf %s %s", workDir, MustGatherFileName, logsDir)
+	command = fmt.Sprintf("cd %s && tar zcf %s %s", workDir, tarFileName, logsDir)
 	_, err = o.executor.ExecCommand(o.logWriter, "bash", "-c", command)
 	if err != nil {
 		o.log.WithError(err).Errorf("Failed to tar must-gather logs\n")
 		return "", err
 	}
-	return path.Join(workDir, MustGatherFileName), nil
+	fmt.Println("CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC")
+	return path.Join(workDir, tarFileName), execError
 }
 
 func (o *ops) CreateRandomHostname(hostname string) error {
