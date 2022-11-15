@@ -446,16 +446,23 @@ func (c controller) PostInstallConfigs(ctx context.Context, wg *sync.WaitGroup) 
 	c.sendCompleteInstallation(ctx, success, errMessage)
 }
 
+func (c controller) UpdateNodeLabels(ctx context.Context, wg *sync.WaitGroup) {
+	defer func() {
+		c.log.Infof("Finished UpdateNodeLabels")
+		wg.Done()
+	}()
+
+	err := utils.WaitForPredicateWithContext(ctx, LongWaitTimeout, GeneralWaitInterval, c.updateNodesLabels)
+	if err != nil {
+		c.log.Warn("Failed to label the nodes")
+	}
+}
+
 func (c controller) postInstallConfigs(ctx context.Context) error {
 	var err error
 
 	if err = c.waitingForClusterOperators(ctx); err != nil {
 		return errors.Wrapf(err, "Timeout while waiting for cluster operators to be available")
-	}
-
-	err = utils.WaitForPredicateWithContext(ctx, WaitTimeout, GeneralWaitInterval, c.updateNodesLabels)
-	if err != nil {
-		c.log.Warn("Failed to label the nodes")
 	}
 
 	err = utils.WaitForPredicateWithContext(ctx, WaitTimeout, GeneralWaitInterval, c.addRouterCAToClusterCA)
