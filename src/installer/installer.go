@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"k8s.io/apimachinery/pkg/types"
+
 	"github.com/openshift/assisted-installer/src/ops/execute"
 
 	"github.com/go-openapi/swag"
@@ -538,6 +540,14 @@ func (i *installer) uploadControllerLogs(kc k8s_client.K8SClient) {
 		if err != nil {
 			i.log.WithError(err).Warnf("Failed to upload controller logs")
 		}
+	} else {
+		// Print job status in order to see what is going on and why there is no pod running
+		job, err := kc.GetJob(types.NamespacedName{Name: common.AssistedControllerPrefix, Namespace: assistedControllerNamespace})
+		if err != nil {
+			i.log.WithError(err).Warnf("Failed to get %s job", common.AssistedControllerPrefix)
+			return
+		}
+		i.log.Infof("%s job : %v", common.AssistedControllerPrefix, job)
 	}
 }
 

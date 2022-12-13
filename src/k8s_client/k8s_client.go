@@ -83,6 +83,7 @@ type K8SClient interface {
 	PatchNodeLabels(nodeName string, nodeLabels string) error
 	ListJobs(namespace string) (*batchV1.JobList, error)
 	DeleteJob(job types.NamespacedName) error
+	GetJob(job types.NamespacedName) (*batchV1.Job, error)
 }
 
 type K8SClientBuilder func(configPath string, logger logrus.FieldLogger) (K8SClient, error)
@@ -105,7 +106,7 @@ const (
 )
 
 func NewK8SClient(configPath string, logger logrus.FieldLogger) (K8SClient, error) {
-	config, err := clientcmd.BuildConfigFromFlags("", configPath)
+	config, err := clientcmd.BuildConfigFromFlags("https://api.test-infra-cluster-b3fb7c3f.redhat.com:6443", configPath)
 	if err != nil {
 		return &k8sClient{}, errors.Wrap(err, "loading kubeconfig")
 	}
@@ -187,6 +188,10 @@ func (c *k8sClient) ListJobs(namespace string) (*batchV1.JobList, error) {
 		return &batchV1.JobList{}, err
 	}
 	return jobs, nil
+}
+
+func (c *k8sClient) GetJob(job types.NamespacedName) (*batchV1.Job, error) {
+	return c.client.BatchV1().Jobs(job.Namespace).Get(context.TODO(), job.Name, metav1.GetOptions{})
 }
 
 func (c *k8sClient) DeleteJob(job types.NamespacedName) error {

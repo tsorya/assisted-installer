@@ -10,6 +10,9 @@ import (
 	"testing"
 	"time"
 
+	batchV1 "k8s.io/api/batch/v1"
+	"k8s.io/apimachinery/pkg/types"
+
 	"github.com/go-openapi/strfmt"
 	"github.com/golang/mock/gomock"
 	. "github.com/onsi/ginkgo"
@@ -469,6 +472,8 @@ var _ = Describe("installer HostRoleMaster role", func() {
 			reportLogProgressSuccess()
 			mockbmclient.EXPECT().UpdateHostInstallProgress(gomock.Any(), infraEnvId, hostId, models.HostStageWaitingForController, "waiting for controller pod ready event").Return(nil).Times(1)
 			mockk8sclient.EXPECT().GetPods("assisted-installer", gomock.Any(), "").Return(nil, fmt.Errorf("dummy")).Times(1)
+			mockk8sclient.EXPECT().GetJob(types.NamespacedName{Name: common.AssistedControllerPrefix, Namespace: assistedControllerNamespace}).Return(&batchV1.Job{TypeMeta: metav1.TypeMeta{},
+				ObjectMeta: metav1.ObjectMeta{Name: common.AssistedControllerPrefix}}, nil).Times(1)
 			mockk8sclient.EXPECT().ListEvents(assistedControllerNamespace).Return(&events, nil).Times(1)
 			err := installerObj.waitForController(mockk8sclient)
 			Expect(err).NotTo(HaveOccurred())

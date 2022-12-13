@@ -586,3 +586,18 @@ func (mr *MockK8SClientMockRecorder) DeleteJob(job interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteJob", reflect.TypeOf((*MockK8SClient)(nil).DeleteJob), job)
 }
+
+// GetJob mocks base method
+func (m *MockK8SClient) GetJob(job types.NamespacedName) (*v10.Job, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetJob", job)
+	ret0, _ := ret[0].(*v10.Job)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetJob indicates an expected call of GetJob
+func (mr *MockK8SClientMockRecorder) GetJob(job interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetJob", reflect.TypeOf((*MockK8SClient)(nil).GetJob), job)
+}
