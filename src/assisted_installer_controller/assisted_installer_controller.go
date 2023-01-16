@@ -1274,6 +1274,14 @@ func (c controller) parseMustGatherImages() []string {
 	return images
 }
 
+func (c controller) RemoveNamespace(ctx context.Context) {
+	kubeconfigPath, err := c.downloadKubeconfigNoingress(ctx, "/tmp")
+	if err != nil {
+		return
+	}
+	_ = c.ops.RemoveNamespaceWithOC(c.Namespace, kubeconfigPath)
+}
+
 func (c controller) downloadKubeconfigNoingress(ctx context.Context, dir string) (string, error) {
 	// Download kubeconfig file
 	kubeconfigPath := path.Join(dir, kubeconfigFileName)
@@ -1363,6 +1371,7 @@ func (c *controller) UploadLogs(ctx context.Context, wg *sync.WaitGroup) {
 				}
 				return err == nil
 			})
+			c.RemoveNamespace(progressCtx)
 			c.ic.ClusterLogProgressReport(progressCtx, c.ClusterID, models.LogsStateCompleted)
 			return
 		case <-ticker.C:

@@ -65,6 +65,7 @@ type Ops interface {
 	ReadFile(filePath string) ([]byte, error)
 	TarFolder(pathToFolder, outPutTarName string) (string, error)
 	CollectHostLogs() (string, error)
+	RemoveNamespaceWithOC(namespace, kubeconfig string) error
 }
 
 const (
@@ -842,6 +843,15 @@ func (o *ops) CollectHostLogs() (string, error) {
 	}
 
 	return o.TarFolder(hostPodLogs, outPutTar)
+}
+
+func (o *ops) RemoveNamespaceWithOC(namespace, kubeconfig string) error {
+	o.log.Infof("Removing namespace %s with kubeconfig %s", namespace, kubeconfig)
+	_, err := o.executor.ExecCommand(o.logWriter, "oc", "--kubeconfig", kubeconfig, "delete", "namespace", namespace, "--force")
+	if err != nil {
+		o.log.WithError(err).Info("Failed to delete namespace %s", namespace)
+	}
+	return err
 }
 
 func (o *ops) TarFolder(pathToFolder, outPutTarName string) (string, error) {
