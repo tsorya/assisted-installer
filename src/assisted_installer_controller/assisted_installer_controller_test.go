@@ -170,8 +170,8 @@ var _ = Describe("installer HostRoleMaster role", func() {
 
 	validateClusterOperaotrReport := func(data map[string]interface{}) {
 		Expect(data).ShouldNot(BeNil())
-		Expect(data[cluster_operator_report_key]).ShouldNot(BeNil())
-		omr := data[cluster_operator_report_key].([]models.OperatorMonitorReport)[0]
+		Expect(data[clusterOperatorReportKey]).ShouldNot(BeNil())
+		omr := data[clusterOperatorReportKey].([]models.OperatorMonitorReport)[0]
 		Expect(omr.Name).Should(Equal("authentication"))
 		Expect(omr.Status).Should(Equal(models.OperatorStatusFailed))
 		Expect(omr.StatusInfo).Should(Equal("This is a test message"))
@@ -1136,6 +1136,61 @@ var _ = Describe("installer HostRoleMaster role", func() {
 				wg.Add(1)
 				assistedController.UpdateNodeLabels(context.TODO(), &wg)
 				wg.Wait()
+			})
+			It("Set host roles but nodes are not workers, should not pause mcp", func() {
+				nodeRoleLabel := fmt.Sprintf("{\"%s\": \"infra\"}", roleLabel)
+				hosts := create3Hosts(models.HostStatusInstalled, models.HostStageDone, nodeRoleLabel)
+				mockbmclient.EXPECT().GetHosts(gomock.Any(), gomock.Any(), []string{models.HostStatusDisabled, models.HostStatusError}).
+					Return(hosts, nil).Times(1)
+				listNodes()
+				mockk8sclient.EXPECT().PatchNodeLabels(gomock.Any(), nodeRoleLabel).Return(nil).Times(3)
+
+				wg.Add(1)
+				assistedController.UpdateNodeLabels(context.TODO(), &wg)
+				wg.Wait()
+			})
+			It("Set host roles", func() {
+				nodeRoleLabel := fmt.Sprintf("{\"%s\": \"infra\"}", roleLabel)
+				hosts := create3Hosts(models.HostStatusInstalled, models.HostStageDone, nodeRoleLabel)
+				hosts["node0"].Host.Role = models.HostRoleWorker
+				mockbmclient.EXPECT().GetHosts(gomock.Any(), gomock.Any(), []string{models.HostStatusDisabled, models.HostStatusError}).
+					Return(hosts, nil).Times(1)
+				listNodes()
+				mockk8sclient.EXPECT().PatchNodeLabels(gomock.Any(), nodeRoleLabel).Return(nil).Times(3)
+				gomock.InOrder(
+					mockk8sclient.EXPECT().PauseUnpauseMachineConfigPool(true, workerMCPName).Return(nil).Times(1),
+					mockk8sclient.EXPECT().PauseUnpauseMachineConfigPool(false, workerMCPName).Return(nil).Times(1),
+				)
+
+				wg.Add(1)
+				assistedController.UpdateNodeLabels(context.TODO(), &wg)
+				wg.Wait()
+			})
+			It("Set host roles but pause failed", func() {
+				nodeRoleLabel := fmt.Sprintf("{\"%s\": \"infra\"}", roleLabel)
+				hosts := create3Hosts(models.HostStatusInstalled, models.HostStageDone, nodeRoleLabel)
+				hosts["node0"].Host.Role = models.HostRoleWorker
+				mockbmclient.EXPECT().GetHosts(gomock.Any(), gomock.Any(), []string{models.HostStatusDisabled, models.HostStatusError}).
+					Return(hosts, nil).Times(1)
+				mockk8sclient.EXPECT().PauseUnpauseMachineConfigPool(true, workerMCPName).Return(fmt.Errorf("dummy")).Times(1)
+				shouldRetry := assistedController.setNodesLabels()
+				Expect(shouldRetry).To(Equal(false))
+			})
+			It("Set host roles but unpause failed", func() {
+				nodeRoleLabel := fmt.Sprintf("{\"%s\": \"infra\"}", roleLabel)
+				hosts := create3Hosts(models.HostStatusInstalled, models.HostStageDone, nodeRoleLabel)
+				hosts["node0"].Host.Role = models.HostRoleWorker
+				mockbmclient.EXPECT().GetHosts(gomock.Any(), gomock.Any(), []string{models.HostStatusDisabled, models.HostStatusError}).
+					Return(hosts, nil).Times(1)
+				listNodes()
+				mockk8sclient.EXPECT().PatchNodeLabels(gomock.Any(), nodeRoleLabel).Return(nil).Times(3)
+				gomock.InOrder(
+					mockk8sclient.EXPECT().PauseUnpauseMachineConfigPool(true, workerMCPName).Return(nil).Times(1),
+					mockk8sclient.EXPECT().PauseUnpauseMachineConfigPool(false, workerMCPName).Return(fmt.Errorf("dummy")).Times(1),
+				)
+
+				shouldRetry := assistedController.setNodesLabels()
+				Expect(shouldRetry).To(Equal(false))
 			})
 		})
 	})

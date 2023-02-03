@@ -545,6 +545,20 @@ func (mr *MockK8SClientMockRecorder) PatchNodeLabels(nodeName, nodeLabels interf
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PatchNodeLabels", reflect.TypeOf((*MockK8SClient)(nil).PatchNodeLabels), nodeName, nodeLabels)
 }
 
+// PauseUnpauseMachineConfigPool mocks base method.
+func (m *MockK8SClient) PauseUnpauseMachineConfigPool(pause bool, mcpName string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "PauseUnpauseMachineConfigPool", pause, mcpName)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// PauseUnpauseMachineConfigPool indicates an expected call of PauseUnpauseMachineConfigPool.
+func (mr *MockK8SClientMockRecorder) PauseUnpauseMachineConfigPool(pause, mcpName interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PauseUnpauseMachineConfigPool", reflect.TypeOf((*MockK8SClient)(nil).PauseUnpauseMachineConfigPool), pause, mcpName)
+}
+
 // RunOCctlCommand mocks base method.
 func (m *MockK8SClient) RunOCctlCommand(args []string, kubeconfigPath string, o ops.Ops) (string, error) {
 	m.ctrl.T.Helper()

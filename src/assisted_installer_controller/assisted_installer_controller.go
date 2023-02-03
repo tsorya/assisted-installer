@@ -61,8 +61,10 @@ const (
 	customManifestsFile       = "custom_manifests.json"
 	kubeconfigFileName        = "kubeconfig-noingress"
 
-	consoleCapabilityName              = configv1.ClusterVersionCapability("Console")
-	cluster_operator_report_key string = "CLUSTER_OPERATORS_REPORT"
+	consoleCapabilityName           = configv1.ClusterVersionCapability("Console")
+	clusterOperatorReportKey string = "CLUSTER_OPERATORS_REPORT"
+	workerMCPName                   = "worker"
+	roleLabel                       = "node-role.kubernetes.io"
 )
 
 var (
@@ -452,27 +454,14 @@ func (c controller) PostInstallConfigs(ctx context.Context, wg *sync.WaitGroup) 
 	c.sendCompleteInstallation(ctx, success, errMessage, data)
 }
 
-func (c controller) UpdateNodeLabels(ctx context.Context, wg *sync.WaitGroup) {
-	defer func() {
-		c.log.Infof("Finished UpdateNodeLabels")
-		wg.Done()
-	}()
-
-	c.log.Infof("Updating host labels if required")
-	err := utils.WaitForPredicateWithContext(ctx, LongWaitTimeout, GeneralWaitInterval, c.updateNodesLabels)
-	if err != nil {
-		c.log.Warn("Failed to label the nodes")
-	}
-}
-
 func (c controller) postInstallConfigs(ctx context.Context) (error, map[string]interface{}) {
 	var err error
 	var data map[string]interface{}
 
 	err = c.waitingForClusterOperators(ctx)
-	//copmiles a report about cluster operators and prints it to the logs
+	// compiles a report about cluster operators and prints it to the logs
 	if report := c.operatorReport(); report != nil {
-		data = map[string]interface{}{cluster_operator_report_key: report}
+		data = map[string]interface{}{clusterOperatorReportKey: report}
 	}
 
 	if err != nil {
@@ -989,6 +978,7 @@ func (c controller) waitForCSV(ctx context.Context, waitTimeout time.Duration) e
 func (c controller) waitingForClusterOperators(ctx context.Context) error {
 	// In case cvo changes it message we will update timer but we want to have maximum timeout
 	// for this context with timeout is used
+	c.log.Info("Waiting for cluster operators")
 	ctxWithTimeout, cancel := context.WithTimeout(ctx, CVOMaxTimeout)
 	defer cancel()
 	isClusterVersionAvailable := func(timer *time.Timer) bool {
@@ -1015,6 +1005,19 @@ func (c controller) waitingForClusterOperators(ctx context.Context) error {
 	return utils.WaitForPredicateWithTimer(ctxWithTimeout, WaitTimeout, GeneralProgressUpdateInt, isClusterVersionAvailable)
 }
 
+func (c controller) UpdateNodeLabels(ctx context.Context, wg *sync.WaitGroup) {
+	defer func() {
+		c.log.Infof("Finished UpdateNodeLabels")
+		wg.Done()
+	}()
+
+	c.log.Infof("Updating host labels if required")
+	err := utils.WaitForPredicateWithContext(ctx, LongWaitTimeout, GeneralWaitInterval, c.setNodesLabels)
+	if err != nil {
+		c.log.Warn("Failed to label the nodes")
+	}
+}
+
 func areNodeLabelsUpdated(node v1.Node, nodeLabels string) bool {
 	nodeLabelsPresent := node.Labels
 	nodeLabelsRequired := make(map[string]string)
@@ -1029,15 +1032,15 @@ func areNodeLabelsUpdated(node v1.Node, nodeLabels string) bool {
 	return true
 }
 
-func (c *controller) updateNodesLabels() bool {
+func (c *controller) getAIHostsWithLabelsAndCheckIfPauseMCPRequired() (map[string]inventory_client.HostData, bool, error) {
 	ignoreStatuses := []string{models.HostStatusDisabled, models.HostStatusError}
+	pauseMCPRequired := false
 	ctxReq := utils.GenerateRequestContext()
 	log := utils.RequestIDLogger(ctxReq, c.log)
-
 	assistedNodesMap, err := c.ic.GetHosts(ctxReq, log, ignoreStatuses)
 	if err != nil {
 		log.WithError(err).Error("Failed to get node map from the assisted service")
-		return KeepWaiting
+		return nil, false, err
 	}
 
 	hostsWithLabels := make(map[string]inventory_client.HostData)
@@ -1046,17 +1049,50 @@ func (c *controller) updateNodesLabels() bool {
 			continue
 		}
 		hostsWithLabels[hostname] = hostData
+		// if host is worker and new role was set we need to pause MCP
+		if hostData.Host.Role == models.HostRoleWorker && strings.Contains(hostData.Host.NodeLabels, roleLabel) {
+			pauseMCPRequired = true
+		}
+	}
+	return hostsWithLabels, pauseMCPRequired, nil
+}
+
+// Set labels to hosts
+// If one of the labels was role pause mcp and set this role
+// after setting all labels unpause in case it was paused
+func (c *controller) setNodesLabels() bool {
+	c.log.Infof("Setting node labels if require")
+	hostsWithLabels, pauseMCO, err := c.getAIHostsWithLabelsAndCheckIfPauseMCPRequired()
+	if err != nil {
+		return KeepWaiting
 	}
 	if len(hostsWithLabels) == 0 {
 		c.log.Infof("No hosts with labels, skipping update node labels")
 		return ExitWaiting
 	}
 
-	if len(hostsWithLabels) > c.patchNodesLabels(log, hostsWithLabels) {
-		return KeepWaiting
-	} else {
-		return ExitWaiting
+	// if it was paused already we will skip in PauseUnpauseMachineConfigPool
+	if pauseMCO {
+		err = c.kc.PauseUnpauseMachineConfigPool(true, workerMCPName)
+		if err != nil {
+			c.log.WithError(err).Warnf("Failed to pause pool %s", workerMCPName)
+			return KeepWaiting
+		}
 	}
+
+	if len(hostsWithLabels) > c.patchNodesLabels(c.log, hostsWithLabels) {
+		return KeepWaiting
+	}
+
+	if pauseMCO {
+		err = c.kc.PauseUnpauseMachineConfigPool(false, workerMCPName)
+		if err != nil {
+			c.log.WithError(err).Warnf("Failed to unpause pool %s", workerMCPName)
+			return KeepWaiting
+		}
+	}
+
+	return ExitWaiting
 }
 
 func (c controller) patchNodesLabels(log logrus.FieldLogger, hostsWithLabels map[string]inventory_client.HostData) int {
