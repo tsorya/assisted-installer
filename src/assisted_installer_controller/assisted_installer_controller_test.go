@@ -1137,19 +1137,23 @@ var _ = Describe("installer HostRoleMaster role", func() {
 				assistedController.UpdateNodeLabels(context.TODO(), &wg)
 				wg.Wait()
 			})
-			It("Set host roles but nodes are not workers, should not pause mcp", func() {
+			It("Set host roles - masters", func() {
 				nodeRoleLabel := fmt.Sprintf("{\"%s\": \"infra\"}", roleLabel)
 				hosts := create3Hosts(models.HostStatusInstalled, models.HostStageDone, nodeRoleLabel)
 				mockbmclient.EXPECT().GetHosts(gomock.Any(), gomock.Any(), []string{models.HostStatusDisabled, models.HostStatusError}).
 					Return(hosts, nil).Times(1)
 				listNodes()
 				mockk8sclient.EXPECT().PatchNodeLabels(gomock.Any(), nodeRoleLabel).Return(nil).Times(3)
+				gomock.InOrder(
+					mockk8sclient.EXPECT().PauseUnpauseMachineConfigPool(true, "master").Return(nil).Times(1),
+					mockk8sclient.EXPECT().PauseUnpauseMachineConfigPool(false, "master").Return(nil).Times(1),
+				)
 
 				wg.Add(1)
 				assistedController.UpdateNodeLabels(context.TODO(), &wg)
 				wg.Wait()
 			})
-			It("Set host roles", func() {
+			It("Set host roles - masters and worker", func() {
 				nodeRoleLabel := fmt.Sprintf("{\"%s\": \"infra\"}", roleLabel)
 				hosts := create3Hosts(models.HostStatusInstalled, models.HostStageDone, nodeRoleLabel)
 				hosts["node0"].Host.Role = models.HostRoleWorker
@@ -1157,10 +1161,12 @@ var _ = Describe("installer HostRoleMaster role", func() {
 					Return(hosts, nil).Times(1)
 				listNodes()
 				mockk8sclient.EXPECT().PatchNodeLabels(gomock.Any(), nodeRoleLabel).Return(nil).Times(3)
-				gomock.InOrder(
-					mockk8sclient.EXPECT().PauseUnpauseMachineConfigPool(true, workerMCPName).Return(nil).Times(1),
-					mockk8sclient.EXPECT().PauseUnpauseMachineConfigPool(false, workerMCPName).Return(nil).Times(1),
-				)
+
+				mockk8sclient.EXPECT().PauseUnpauseMachineConfigPool(true, "worker").Return(nil).Times(1)
+				mockk8sclient.EXPECT().PauseUnpauseMachineConfigPool(true, "master").Return(nil).Times(1)
+
+				mockk8sclient.EXPECT().PauseUnpauseMachineConfigPool(false, "worker").Return(nil).Times(1)
+				mockk8sclient.EXPECT().PauseUnpauseMachineConfigPool(false, "master").Return(nil).Times(1)
 
 				wg.Add(1)
 				assistedController.UpdateNodeLabels(context.TODO(), &wg)
@@ -1169,24 +1175,22 @@ var _ = Describe("installer HostRoleMaster role", func() {
 			It("Set host roles but pause failed", func() {
 				nodeRoleLabel := fmt.Sprintf("{\"%s\": \"infra\"}", roleLabel)
 				hosts := create3Hosts(models.HostStatusInstalled, models.HostStageDone, nodeRoleLabel)
-				hosts["node0"].Host.Role = models.HostRoleWorker
 				mockbmclient.EXPECT().GetHosts(gomock.Any(), gomock.Any(), []string{models.HostStatusDisabled, models.HostStatusError}).
 					Return(hosts, nil).Times(1)
-				mockk8sclient.EXPECT().PauseUnpauseMachineConfigPool(true, workerMCPName).Return(fmt.Errorf("dummy")).Times(1)
+				mockk8sclient.EXPECT().PauseUnpauseMachineConfigPool(true, "master").Return(fmt.Errorf("dummy")).Times(1)
 				shouldRetry := assistedController.setNodesLabels()
 				Expect(shouldRetry).To(Equal(false))
 			})
 			It("Set host roles but unpause failed", func() {
 				nodeRoleLabel := fmt.Sprintf("{\"%s\": \"infra\"}", roleLabel)
 				hosts := create3Hosts(models.HostStatusInstalled, models.HostStageDone, nodeRoleLabel)
-				hosts["node0"].Host.Role = models.HostRoleWorker
 				mockbmclient.EXPECT().GetHosts(gomock.Any(), gomock.Any(), []string{models.HostStatusDisabled, models.HostStatusError}).
 					Return(hosts, nil).Times(1)
 				listNodes()
 				mockk8sclient.EXPECT().PatchNodeLabels(gomock.Any(), nodeRoleLabel).Return(nil).Times(3)
 				gomock.InOrder(
-					mockk8sclient.EXPECT().PauseUnpauseMachineConfigPool(true, workerMCPName).Return(nil).Times(1),
-					mockk8sclient.EXPECT().PauseUnpauseMachineConfigPool(false, workerMCPName).Return(fmt.Errorf("dummy")).Times(1),
+					mockk8sclient.EXPECT().PauseUnpauseMachineConfigPool(true, "master").Return(nil).Times(1),
+					mockk8sclient.EXPECT().PauseUnpauseMachineConfigPool(false, "master").Return(fmt.Errorf("dummy")).Times(1),
 				)
 
 				shouldRetry := assistedController.setNodesLabels()
@@ -2040,7 +2044,7 @@ func create3Hosts(currentStatus string, stage models.HostStage, nodeLabels strin
 	node1Id := strfmt.UUID("eb82821f-bf21-4614-9a3b-ecb07929f238")
 	node2Id := strfmt.UUID("b898d516-3e16-49d0-86a5-0ad5bd04e3ed")
 	return map[string]inventory_client.HostData{
-		"node0": {Host: &models.Host{InfraEnvID: infraEnvId, ID: &node0Id, NodeLabels: nodeLabels, Progress: &currentState, Status: &currentStatus}},
-		"node1": {Host: &models.Host{InfraEnvID: infraEnvId, ID: &node1Id, NodeLabels: nodeLabels, Progress: &currentState, Status: &currentStatus}},
-		"node2": {Host: &models.Host{InfraEnvID: infraEnvId, ID: &node2Id, NodeLabels: nodeLabels, Progress: &currentState, Status: &currentStatus}}}
+		"node0": {Host: &models.Host{InfraEnvID: infraEnvId, ID: &node0Id, NodeLabels: nodeLabels, Progress: &currentState, Status: &currentStatus, Role: models.HostRoleMaster}},
+		"node1": {Host: &models.Host{InfraEnvID: infraEnvId, ID: &node1Id, NodeLabels: nodeLabels, Progress: &currentState, Status: &currentStatus, Role: models.HostRoleMaster}},
+		"node2": {Host: &models.Host{InfraEnvID: infraEnvId, ID: &node2Id, NodeLabels: nodeLabels, Progress: &currentState, Status: &currentStatus, Role: models.HostRoleMaster}}}
 }

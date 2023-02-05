@@ -18,13 +18,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/thoas/go-funk"
-
 	"github.com/hashicorp/go-version"
 	metal3v1alpha1 "github.com/metal3-io/baremetal-operator/apis/metal3.io/v1alpha1"
 	configv1 "github.com/openshift/api/config/v1"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
+	"github.com/thoas/go-funk"
 	certificatesv1 "k8s.io/api/certificates/v1"
 	v1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -63,7 +62,6 @@ const (
 
 	consoleCapabilityName           = configv1.ClusterVersionCapability("Console")
 	clusterOperatorReportKey string = "CLUSTER_OPERATORS_REPORT"
-	workerMCPName                   = "worker"
 	roleLabel                       = "node-role.kubernetes.io"
 )
 
@@ -1032,17 +1030,18 @@ func areNodeLabelsUpdated(node v1.Node, nodeLabels string) bool {
 	return true
 }
 
-func (c *controller) getAIHostsWithLabelsAndCheckIfPauseMCPRequired() (map[string]inventory_client.HostData, bool, error) {
+func (c *controller) getAIHostsWithLabelsAndMCPsToPause() (map[string]inventory_client.HostData, []string, error) {
 	ignoreStatuses := []string{models.HostStatusDisabled, models.HostStatusError}
-	pauseMCPRequired := false
 	ctxReq := utils.GenerateRequestContext()
 	log := utils.RequestIDLogger(ctxReq, c.log)
+	var mcpsToPause []string
 	assistedNodesMap, err := c.ic.GetHosts(ctxReq, log, ignoreStatuses)
 	if err != nil {
 		log.WithError(err).Error("Failed to get node map from the assisted service")
-		return nil, false, err
+		return nil, mcpsToPause, err
 	}
 
+	mcpsToPauseDict := make(map[string]bool)
 	hostsWithLabels := make(map[string]inventory_client.HostData)
 	for hostname, hostData := range assistedNodesMap {
 		if len(hostData.Host.NodeLabels) == 0 {
@@ -1050,11 +1049,28 @@ func (c *controller) getAIHostsWithLabelsAndCheckIfPauseMCPRequired() (map[strin
 		}
 		hostsWithLabels[hostname] = hostData
 		// if host is worker and new role was set we need to pause MCP
-		if hostData.Host.Role == models.HostRoleWorker && strings.Contains(hostData.Host.NodeLabels, roleLabel) {
-			pauseMCPRequired = true
+		if strings.Contains(hostData.Host.NodeLabels, roleLabel) {
+			mcpsToPauseDict[string(hostData.Host.Role)] = true
 		}
 	}
-	return hostsWithLabels, pauseMCPRequired, nil
+
+	for k := range mcpsToPauseDict {
+		mcpsToPause = append(mcpsToPause, k)
+	}
+
+	return hostsWithLabels, mcpsToPause, nil
+}
+
+func (c *controller) pauseUnpauseMCPs(pause bool, mcpsToPause []string) error {
+	fmt.Println("AAAAAAAAAAAAAAAAAAAA", mcpsToPause)
+	for _, mcp := range mcpsToPause {
+		err := c.kc.PauseUnpauseMachineConfigPool(pause, mcp)
+		if err != nil {
+			c.log.WithError(err).Warnf("Failed to pause pool %s", mcp)
+			return err
+		}
+	}
+	return nil
 }
 
 // Set labels to hosts
@@ -1062,7 +1078,7 @@ func (c *controller) getAIHostsWithLabelsAndCheckIfPauseMCPRequired() (map[strin
 // after setting all labels unpause in case it was paused
 func (c *controller) setNodesLabels() bool {
 	c.log.Infof("Setting node labels if require")
-	hostsWithLabels, pauseMCO, err := c.getAIHostsWithLabelsAndCheckIfPauseMCPRequired()
+	hostsWithLabels, mcpsToPause, err := c.getAIHostsWithLabelsAndMCPsToPause()
 	if err != nil {
 		return KeepWaiting
 	}
@@ -1072,10 +1088,9 @@ func (c *controller) setNodesLabels() bool {
 	}
 
 	// if it was paused already we will skip in PauseUnpauseMachineConfigPool
-	if pauseMCO {
-		err = c.kc.PauseUnpauseMachineConfigPool(true, workerMCPName)
+	if len(mcpsToPause) > 0 {
+		err = c.pauseUnpauseMCPs(true, mcpsToPause)
 		if err != nil {
-			c.log.WithError(err).Warnf("Failed to pause pool %s", workerMCPName)
 			return KeepWaiting
 		}
 	}
@@ -1084,10 +1099,9 @@ func (c *controller) setNodesLabels() bool {
 		return KeepWaiting
 	}
 
-	if pauseMCO {
-		err = c.kc.PauseUnpauseMachineConfigPool(false, workerMCPName)
+	if len(mcpsToPause) > 0 {
+		err = c.pauseUnpauseMCPs(false, mcpsToPause)
 		if err != nil {
-			c.log.WithError(err).Warnf("Failed to unpause pool %s", workerMCPName)
 			return KeepWaiting
 		}
 	}
