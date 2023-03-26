@@ -73,8 +73,6 @@ spec:
               mountPath: /etc/pki
             - name: host-var-run-resolv-conf
               mountPath: /tmp/var-run-resolv.conf
-            - name: host-resolv-conf
-              mountPath: /tmp/host-resolv.conf
           {{if .SNO}}
             - name: sno-bootstrap-files
               mountPath: /tmp/bootstrap-secrets
@@ -107,9 +105,6 @@ spec:
         - name: host-var-run-resolv-conf
           hostPath:
             path: /var/run/NetworkManager/resolv.conf
-        - name: host-resolv-conf
-          hostPath:
-            path: /etc/resolv.conf
         {{if .SNO}}
         - name: sno-bootstrap-files
           hostPath:

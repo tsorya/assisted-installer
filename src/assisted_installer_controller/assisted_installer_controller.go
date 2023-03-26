@@ -1186,7 +1186,7 @@ func (c controller) operatorReport() []models.OperatorMonitorReport {
 }
 
 func (c controller) logHostResolvConf() {
-	for _, filePath := range []string{"/etc/resolv.conf", "/tmp/var-run-resolv.conf", "/tmp/host-resolv.conf"} {
+	for _, filePath := range []string{"/etc/resolv.conf", "/tmp/var-run-resolv.conf"} {
 		content, err := c.ops.ReadFile(filePath)
 		if err != nil {
 			c.log.WithError(err).Warnf("Failed to read %s", filePath)

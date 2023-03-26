@@ -177,7 +177,7 @@ var _ = Describe("installer HostRoleMaster role", func() {
 	}
 
 	logResolvConfSuccess := func() {
-		mockops.EXPECT().ReadFile(gomock.Any()).Return([]byte("test"), nil).MinTimes(3)
+		mockops.EXPECT().ReadFile(gomock.Any()).Return([]byte("test"), nil).MinTimes(2)
 	}
 
 	reportLogProgressSuccess := func() {
@@ -1549,7 +1549,7 @@ var _ = Describe("installer HostRoleMaster role", func() {
 		It("Validate resolv conf failure will not block must-gather", func() {
 			successUpload()
 			logClusterOperatorsSuccess()
-			mockops.EXPECT().ReadFile(gomock.Any()).Return(nil, fmt.Errorf("fummy")).MinTimes(3)
+			mockops.EXPECT().ReadFile(gomock.Any()).Return(nil, fmt.Errorf("fummy")).MinTimes(2)
 			mockops.EXPECT().GetMustGatherLogs(gomock.Any(), gomock.Any(), assistedController.MustGatherImage).Return("../../test_files/tartest.tar.gz", nil).Times(1)
 			mockbmclient.EXPECT().DownloadClusterCredentials(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(1)
 			assistedController.Status.Error()
