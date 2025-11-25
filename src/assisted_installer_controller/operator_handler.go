@@ -199,14 +199,14 @@ func (handler ClusterServiceVersionHandler) handleOLMEarlySetupBug() error {
 		handler.log.WithError(err).Warnf("Failed to delete olm jobs")
 		return err
 	}
-	// OLM for some reason doesn't reconcile the subscription if job was deleted
-	// so we have to delete failed install plans to force OLM
-	// to re-create them and jobs that were deleted previously
-	err = handler.deleteFailedSubscriptionInstallPlans()
-	if err != nil {
-		handler.log.WithError(err).Warnf("Failed to delete %s install plan", handler.GetName())
-		return err
-	}
+	// // OLM for some reason doesn't reconcile the subscription if job was deleted
+	// // so we have to delete failed install plans to force OLM
+	// // to re-create them and jobs that were deleted previously
+	// err = handler.deleteFailedSubscriptionInstallPlans()
+	// if err != nil {
+	// 	handler.log.WithError(err).Warnf("Failed to delete %s install plan", handler.GetName())
+	// 	return err
+	// }
 
 	return nil
 }
